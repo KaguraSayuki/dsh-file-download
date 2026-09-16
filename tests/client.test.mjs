@@ -109,7 +109,7 @@ test("the bundle registers under the row id it is served as", () => {
 
 test("the browser half injects only services the client plane provides", () => {
 	const { module } = loadClient();
-	assert.deepEqual([...module.inject].sort(), ["locale", "sessions", "slots"]);
+	assert.deepEqual([...module.inject].sort(), ["locale", "sessions", "sidebarRightTabs", "slots"]);
 	assert.equal(typeof module.apply, "function");
 });
 
@@ -155,39 +155,94 @@ test("download URLs are same-origin, absolute, and fully encoded", () => {
 	assert.equal(url.searchParams.get("path"), "out/实验 报告.md");
 });
 
-test("apply registers the turn-tail chain entry and installs one stylesheet", () => {
-	const { module, document } = loadClient();
+/** A fake client context that records every registration. */
+function fakeClientContext() {
 	const slots = [];
 	const injected = [];
-	const ctx = {
-		effect: (callback) => callback(),
-		locale: { register: () => () => {}, bind: () => (key) => key },
-		slots: {
-			inject: (name, callback) => {
-				injected.push(name);
-				return callback();
+	const types = [];
+	return {
+		slots,
+		injected,
+		types,
+		ctx: {
+			effect: (callback) => callback(),
+			locale: { register: () => () => {}, bind: () => (key) => key },
+			sidebarRightTabs: {
+				register: (definition) => {
+					types.push(definition);
+					return () => {};
+				}
 			},
-			register: (options) => {
-				slots.push(options);
-				return () => {};
-			}
-		},
-		sessions: {
-			list: {
-				getSnapshot: () => ({ current: "session-1" }),
-				subscribe: () => () => {}
+			slots: {
+				inject: (name, callback) => {
+					injected.push(name);
+					return callback();
+				},
+				register: (options) => {
+					slots.push(options);
+					return () => {};
+				}
+			},
+			sessions: {
+				list: {
+					getSnapshot: () => ({ current: "session-1" }),
+					subscribe: () => () => {}
+				}
 			}
 		}
 	};
+}
+
+test("apply registers the Sidebar browser type, its body, the turn tail, and one stylesheet", () => {
+	const { module, document } = loadClient();
+	const { ctx, slots, injected, types } = fakeClientContext();
 	module.apply(ctx);
-	assert.deepEqual(injected, ["conversation.chat.turnTail"]);
-	assert.equal(slots.length, 1);
-	assert.equal(slots[0].name, "conversation.chat.turnTail");
-	assert.equal(slots[0].locale, "file-download");
-	assert.equal(typeof slots[0].select, "function");
+	assert.deepEqual(injected, ["sidebar.right.pane.tab", "sidebar.right.pane.tab.title", "conversation.chat.turnTail"]);
+	assert.equal(types.length, 1);
+	assert.equal(types[0].id, "dsh-file-download");
+	assert.equal(types[0].kind, "workspace-browser");
+	assert.equal(types[0].patterns, undefined, "a page type recognizes no resource address");
+	const tabs = slots.filter((entry) => entry.name === "sidebar.right.pane.tab");
+	const titles = slots.filter((entry) => entry.name === "sidebar.right.pane.tab.title");
+	const tails = slots.filter((entry) => entry.name === "conversation.chat.turnTail");
+	assert.equal(tabs.length, 1);
+	assert.equal(tabs[0].key, "dsh-file-download");
+	assert.equal(tabs[0].locale, "file-download");
+	assert.equal(titles.length, 1);
+	assert.equal(tails.length, 1);
+	assert.equal(typeof tails[0].select, "function");
 	const styles = document.head.children.filter((node) => node.tagName === "STYLE");
 	assert.equal(styles.length, 1);
 	assert.equal(styles[0].dataset.plugin, "dsh-file-download");
+});
+
+test("URL builders stay on this origin and name the host routes", () => {
+	const { module } = loadClient();
+	assert.equal(new URL(module.listUrl("s1", "/etc")).pathname, "/api/workspace.download/list");
+	assert.equal(new URL(module.listUrl("s1", "/etc")).searchParams.get("path"), "/etc");
+	assert.equal(new URL(module.archiveUrl("s1", "/etc")).pathname, "/api/workspace.download/archive");
+	assert.equal(new URL(module.browseUrl("s1")).pathname, "/api/workspace.download/browse");
+	assert.equal(new URL(module.downloadUrl("s1", "a.txt")).pathname, "/api/workspace.download");
+});
+
+test("preview addresses encode one segment at a time and keep the drive colon", () => {
+	const { module } = loadClient();
+	assert.equal(module.sessionFileAddress("session-1", "out/report file.md"), "dsh-resource://file/session/session-1/out/report%20file.md");
+	assert.equal(module.sessionFileAddress("C:", "C:/x.md"), "dsh-resource://file/session/C:/C:/x.md");
+});
+
+test("a reference is relative inside the workspace and absolute outside", () => {
+	const { module } = loadClient();
+	assert.equal(module.referenceText("/work/src/a.ts", "/work"), "@src/a.ts");
+	assert.equal(module.referenceText("/etc/hosts", "/work"), "/etc/hosts");
+	assert.equal(module.referenceText("/work", "/work"), "@work");
+});
+
+test("breadcrumbs and parents keep the root intact on the client too", () => {
+	const { module } = loadClient();
+	assert.deepEqual(Array.from(module.breadcrumbsFor("/a/b"), (crumb) => crumb.path), ["/", "/a", "/a/b"]);
+	assert.equal(module.parentPath("/a/b"), "/a");
+	assert.equal(module.parentPath("/"), "/");
 });
 
 test("the decoration pass appends to published hooks and re-applies after removal", () => {
@@ -231,12 +286,7 @@ test("the decoration pass appends to published hooks and re-applies after remova
 	};
 
 	// Re-run only the decoration effect by re-applying the plugin.
-	const ctx = {
-		effect: (callback) => callback(),
-		locale: { register: () => () => {}, bind: () => (key) => key },
-		slots: { inject: (_, callback) => callback(), register: () => () => {} },
-		sessions: { list: { getSnapshot: () => ({ current: "session-1" }), subscribe: () => () => {} } }
-	};
+	const { ctx } = fakeClientContext();
 	module.apply(ctx);
 	const rowButton = rows[0].children.find((child) => child.getAttribute("data-dsh-download") !== null);
 	assert.ok(rowButton !== undefined, "file-tree row must gain a download button");

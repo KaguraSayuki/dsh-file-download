@@ -61,11 +61,25 @@ check("Connection still owns an exact Fetch route table", connection.includes("r
 const sessionExport = readFileSync(resolveFrom(modules, "@deepseek-ai/dsh-session-log-export"), "utf8");
 check("a shipped consumer still calls connection.fetch.register", sessionExport.includes(".fetch.register({"));
 
-const workspaceFiles = readFileSync(resolveFrom(modules, "@deepseek-ai/dsh-api-workspace-files"), "utf8");
-check("workspaceFiles still provides the service", workspaceFiles.includes('super(ctx, "workspaceFiles")'));
-check("workspaceFiles still exposes stat", workspaceFiles.includes("async stat(workspaceFileScope, path, signal)"));
-check("workspaceFiles still exposes readBytes", workspaceFiles.includes("async readBytes(workspaceFileScope, path, range, signal)"));
-check("workspaceFiles still reports too-large windows", workspaceFiles.includes('"workspace-file/too-large"'));
+const fsRoot = dirname(resolveFrom(modules, "@deepseek-ai/dsh-fs"));
+const fsPackage = readFileSync(resolveFrom(modules, "@deepseek-ai/dsh-fs"), "utf8");
+const fsTypes = readFileSync(join(fsRoot, "types", "index.d.ts"), "utf8");
+const fsValueTypes = readFileSync(join(fsRoot, "types", "types.d.ts"), "utf8");
+const localFs = readFileSync(resolveFrom(modules, "@deepseek-ai/dsh-fs-local"), "utf8");
+check("the filesystem service is still called fs", fsPackage.includes('super(ctx, "fs")'));
+check("the filesystem contract still resolves paths", fsTypes.includes("resolve(path: string, opts?"));
+check("the filesystem contract still stats targets", fsTypes.includes("stat(target: FsTarget, signal?"));
+check("the filesystem contract still lists directories", fsTypes.includes("listDir(target: FsTarget, signal?"));
+check("the filesystem contract still reads byte ranges", fsTypes.includes("readByteRange(target: FsTarget, range:"));
+check("the filesystem contract still reports FS_NOT_FOUND", fsValueTypes.includes("FS_NOT_FOUND"));
+check("the local backend still implements listDir", localFs.includes("async listDir(target, signal)"));
+check("directory entries still carry a resolved target", fsValueTypes.includes("target: FsTarget"));
+
+const sidebarRight = packageFile("@deepseek-ai/dsh-client-ui-sidebar-right", "client");
+check("the sidebar right still provides sidebarRightTabs", sidebarRight.includes('provide("sidebarRightTabs"'));
+check("the sidebar right still registers tab types", sidebarRight.includes("register(definition)") || sidebarRight.includes("register(definition:"));
+check("the tab body seat is still a keyed slot", /"sidebar\.right\.pane\.tab":\s*\{\s*kind:\s*"keyed"/u.test(sidebarRight));
+check("the tab title seat still exists", sidebarRight.includes('"sidebar.right.pane.tab.title"'));
 
 const chat = packageFile("@deepseek-ai/dsh-client-ui-chat", "client");
 check("conversation.chat.turnTail is still a chain slot", /"conversation\.chat\.turnTail":\s*\{\s*kind:\s*"chain"/u.test(chat));
