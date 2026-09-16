@@ -6,14 +6,15 @@ Thanks for considering a contribution. This plugin is small on purpose, and the 
 
 In scope:
 
-- New download entry points on official DSH surfaces.
-- Robustness fixes for the host route: streaming, headers, failure mapping, cancellation.
+- Read-side browser features: navigation, filtering, hidden-entry handling, listing metadata, and the row actions that already exist (preview, download, folder ZIP, copy, reference).
+- New authenticated read routes and archive improvements: streaming, headers, failure mapping, cancellation, caps.
 - Compatibility updates when a DSH release moves one of the hooks listed in `tests/contract.mjs`.
 - Documentation fixes, including the Chinese README.
 
 Out of scope:
 
-- A file browser, editor, upload, or archive feature. Those belong to panel plugins; this one extends the official surfaces and composes with them.
+- Any mutating action: upload, rename, delete, edit, chmod, move. Reads are the whole contract here; a write surface needs its own threat model and its own review.
+- Access control beyond the Web GUI's own authentication. Do not add a second password, token scheme, or path allowlist that pretends to be a security boundary; document the read scope instead.
 - A second copy of `Open`/`Reveal` actions. If an official control already does something, do not duplicate it.
 - Bundling or vendoring official DSH components.
 
@@ -39,11 +40,13 @@ DSH_MODULES=/path/to/dsh/node_modules npm run contract
 
 ```sh
 dsh plugin --profile web add "$PWD"
-# restart dsh web, then in a session: produce a file and use each entry point
+# restart dsh web, then exercise every surface
 dsh plugin --profile web remove dsh-file-download
 ```
 
-Check all three surfaces, plus one non-happy path: a filename with non-ASCII characters, a file larger than a few megabytes, and a Session whose file was deleted after delivery.
+Walk the Sidebar **Files** tab from the project root to `/` and back: open a file in the preview, download one, ZIP a folder, copy a path, insert a reference, then tick two entries — including a folder — and use **Download selected (ZIP)**. Repeat one of those through the server-rendered browse page with no GUI open.
+
+Non-happy paths worth one pass each: a filename with non-ASCII characters, a file larger than a few megabytes, a directory that is not readable, a path outside the workspace, an empty directory, and a Session whose file was deleted after delivery.
 
 ## Code style
 
@@ -51,9 +54,11 @@ Check all three surfaces, plus one non-happy path: a filename with non-ASCII cha
 - JSDoc every exported symbol, and every non-obvious internal one, with a one-line summary plus `@param`/`@returns`.
 - Comments explain why a thing is the way it is. A comment that restates the code is noise.
 - Keep the host half free of dependencies. Node built-ins and injected services only.
+- Read and list through `ctx.fs`; never reach for `node:fs`. The composed filesystem owns resolution, `FS_*` errors, and symlink behavior.
 - In `lib/client.js`, stay within the module-loader contract: one `window.__ModuleLoader__.load` call, `require`ing platform seeds only.
+- Keep the two copies of `basename`/`parentPath`/`breadcrumbsFor` (host and browser) in step; the host page and the tab must agree on how a path is displayed.
 
-Before opening a pull request, read `AGENTS.md`. Its invariants are the review checklist: bytes never enter JavaScript, the route stays authenticated and read-only, DOM injection is append-only, and every upstream hook is covered by the contract test.
+Before opening a pull request, read `AGENTS.md`. Its invariants are the review checklist: bytes never enter JavaScript, every route stays authenticated and read-only, reads go through `ctx.fs`, caps are enforced host-side, the browse page ships no script, DOM injection is append-only, and every upstream hook is covered by the contract test.
 
 ## Commits
 

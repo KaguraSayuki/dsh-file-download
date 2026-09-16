@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）Web GUI 补上浏览器下载：直接挂在你已经在用的官方界面上——每轮交付行、交付文件卡片、侧边栏文件树。
+给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）Web GUI 加上文件浏览器与下载面：浏览运行 agent 的那台机器（**包括会话工作区之外的一切**）、下载单个文件、把文件夹打包成 ZIP、把多选条目一次性打包下载。它通过官方页签注册接口扩展官方侧边栏，而不是改 DSH。
 
 [![license](https://img.shields.io/badge/license-MIT-4c6ef5?style=flat-square&labelColor=454a54)](LICENSE)
 [![DSH](https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.1-4c6ef5?style=flat-square&labelColor=454a54)](#兼容性)
@@ -13,17 +13,19 @@
 
 DSH 的原生文件动作是宿主侧的：「用默认程序打开」「在文件管理器中显示」都需要运行 agent 的那台机器上有桌面环境。可当 Web GUI 是从另一台设备打开的——手机、平板、局域网里的笔记本，或者反代后面的无头云主机——那个桌面要么不存在，要么根本不是正在看页面的这台设备。文件在服务器上，浏览器却存不下来。
 
-会话日志已经能导出 ZIP，但普通的产物文件不能。本插件不修改 DSH，只补上这缺失的一环：一条带认证的下载路由，加上官方文件界面上的下载入口。
+官方侧边栏的文件树还被限制在会话工作区内，而且完全没法把文件夹交出来。本插件补上缺失的"读"这一面：一个从工作区出发、但能沿任意绝对路径走遍该文件系统可读范围的浏览器，外加文件下载与文件夹归档。
 
 ## 它加了什么
 
 | 界面 | 入口 |
 |---|---|
-| 每个有交付或改动的收尾回合 | 一个「下载本轮文件」下拉，列出本轮文件，并提供全部下载。原有的「打开」行为完全不变 |
+| 官方右侧栏 | 通过 `ctx.sidebarRightTabs` 注册的 **文件** 页签：从项目根一路走到 `/`、筛选当前目录、显示隐藏项、在官方预览里打开文件、复制路径、把路径插入输入框、下载文件、把文件夹打包成 ZIP，或勾选多项一起打包 |
+| 每个有交付或改动的收尾回合 | 一个「下载本轮文件」下拉，外加一个打开服务端渲染浏览页的入口。原有的「打开」行为完全不变 |
 | 每张交付文件卡片 | 在卡片原有的分体「打开」控件旁多一个下载段。左侧按钮依旧默认走打开 |
-| 侧边栏文件树每一行 | 悬停时出现的下载按钮 |
+| 侧边栏文件树每一行 | 悬停时出现的下载按钮：文件本身，或目录的流式 ZIP |
+| 任意设备、无需客户端 JS | 服务端渲染的浏览页（`/api/workspace.download/browse`），带面包屑、逐文件下载与逐目录 ZIP。页面不带任何脚本，所以从不打开完整 GUI 的手机也能取到文件 |
 
-字节不经过 JavaScript：每次点击都是把一个同源 URL 交给浏览器自己的下载管理器，所以进度、取消、「另存为」都和普通下载完全一致。
+单个下载的字节不经过 JavaScript：每个动作都是把一个同源 URL 交给浏览器自己的下载管理器。多选则用隐藏表单 POST，让浏览器把一个 ZIP 直接流到磁盘，而不是先在页面内存里缓冲。
 
 ## 安装
 
@@ -47,7 +49,13 @@ dsh plugin --profile web remove dsh-file-download
 
 ## 使用
 
-无需配置。打开会话，让 agent 产出或修改文件，然后用上面三个入口中的任意一个。手机或平板上最快的路径是侧边栏文件树：点开侧边栏的文件页，找到文件，用行上的下载按钮。
+打开右侧栏，在页签引导里选 **文件**。
+
+- **项目** 跳到会话工作区根目录，**根目录** 跳到 `/`。路径框接受任意绝对路径：输入后回车即可。
+- **显示隐藏项** 打开点开头的文件（默认隐藏）。筛选框在当前目录内收窄结果，不会跳走。
+- 点文件夹进入；点文件在官方预览页签里打开。
+- 行内动作：预览、下载、压缩下载（目录）、复制路径、插入路径到输入框。工作区内的路径插入为 `@相对路径` 引用，工作区外插入绝对路径。
+- 勾选多行后，底栏提供 **打包下载所选**，把选中的文件与整个文件夹打成同一个 ZIP 流。
 
 ## 工作原理
 
@@ -55,35 +63,42 @@ dsh plugin --profile web remove dsh-file-download
 
 ### 宿主路由
 
-```
-GET  /api/workspace.download?sessionId=<id>&path=<path>
-HEAD /api/workspace.download?sessionId=<id>&path=<path>
-```
+所有路由都注册在 Connection 的精确 Fetch 表上，因此都继承与其他 `/api` 完全相同的 Host/Origin 与浏览器会话检查；没有一条是无认证侧门。
 
-路由注册在 Connection 的精确 Fetch 表上，因此继承与其他 `/api` 调用完全相同的 Host/Origin 与浏览器会话检查，不会变成一条无认证的侧门。读取走组合后的 `workspaceFiles` 服务，文件身份、普通文件校验、相对工作区根解析都与官方侧边栏预览一致。
-
-| 方面 | 行为 |
+| 路由 | 作用 |
 |---|---|
-| 响应 | `Content-Disposition: attachment`，文件名按 RFC 5987 编码，媒体类型按扩展名推断，后端报告大小时带 `Content-Length` |
-| 响应体 | 分页流：每次 pull 一个 256 KiB 的窗口，大文件只占一个窗口的内存 |
-| `HEAD` | 同样的状态与响应头，不读取内容 |
-| 错误 | `400` 请求非法、`403` 越出工作区、`404` 文件或会话不存在、`413` 超过整文件上限、`500` 其它 |
+| `GET /api/workspace.download/list?sessionId=&path=` | 任意可读目录的 JSON 列表：`{ path, parent, workspaceRoot, entries, truncated }` |
+| `GET\|HEAD /api/workspace.download?sessionId=&path=` | 单个普通文件，按 256 KiB 窗口流式返回，带 `Content-Disposition: attachment` |
+| `GET /api/workspace.download/browse?sessionId=&path=` | 无脚本的 HTML 列表页，带面包屑与逐条目的下载/ZIP 链接 |
+| `GET\|HEAD /api/workspace.download/archive?sessionId=&path=` | 一个目录子树，流式打包为 ZIP |
+| `POST /api/workspace.download/archive` | 多选内容打包成一个 ZIP；接受 JSON，或名为 `payload` 的表单字段 |
+
+`path` 缺失或为空表示会话工作区根目录。相对路径以它为基准解析；绝对路径可以离开它。
 
 ### 浏览器界面
 
-回合下拉是官方 `conversation.chat.turnTail` 链式 slot 的真实占用者。它读取的是官方交付行读取的同一份 Turn 数据，所以两份列表不可能不一致；它不注册任何新数据。
+文件页签是通过 `ctx.sidebarRightTabs` 注册的真实页签类型，页签体注册在 keyed 的 `sidebar.right.pane.tab` slot 上——和官方「文件」页签用的是同一套扩展点，因此没有改动任何官方代码。它是页面类型，所以不会与预览争抢文件地址。
 
-交付卡片与文件树按钮是对官方已发布的 DOM 钩子（`data-presented-file`、`data-files-entry`、`data-files-path`）做的装饰。每个注入节点都追加在容器的末尾，而不是插进 React 管理的兄弟节点之间；`MutationObserver` 会在重渲染后重新施加装饰。卸载插件会移除全部注入节点。
+回合下拉是官方 `conversation.chat.turnTail` 链式 slot 的占用者，读取的是官方交付行读取的同一份 Turn 数据，因此两份列表不可能不一致。
+
+交付卡片与文件树按钮是对官方已发布钩子（`data-presented-file`、`data-files-entry`、`data-files-path`）的 DOM 装饰。每个注入节点都追加在容器末尾，而不是插进 React 管理的兄弟节点之间；`MutationObserver` 会在重渲染后重新施加装饰。卸载插件会移除全部注入节点。
+
+### 归档
+
+ZIP 是直接基于 Node 的 `zlib` 手写的：每条目一个 local record，然后是中央目录与结束记录。同一时刻只缓冲一个文件，因此归档内存受单文件上限约束，而不是受整棵树大小约束。
 
 ## 安全
 
-- **带认证**：路由位于 Connection 的栅栏之后，和 `/api/remote.mux` 一样，未认证的访问者无法枚举或抓取文件。
-- **只读**：没有写操作、没有上传、没有目录列举。
-- **与预览同一权限**：只有该会话自己的组合文件系统能读到的文件才可下载，不扩大工作区包含范围。
-- **不缓存**：响应带 `cache-control: no-store`。
-- **不回显路径**：错误体是固定的短字符串，不含解析后的路径或堆栈。
+本插件能读 **运行 dsh 的操作系统账号可读的任意文件**，而不只是会话工作区。这是有意为之——无头主机必须能把工作区旁边的文件交出来——但它比官方文件树的能力更宽，应当是一个自觉的选择。
 
-如果你把 Web GUI 暴露到网络，请照旧在网络层做防护；本插件不改变这一态势。
+- **需要认证，不是匿名。** 每条路由都在 Connection 的栅栏之后，和 `/api/remote.mux` 一样。未认证的访问者无法列举或抓取任何内容。
+- **只读。** 没有上传、写入、删除、重命名、也没有 shell。只暴露读取与归档。
+- **不回显路径。** 错误体是固定的短字符串；解析后的路径或堆栈永不离开进程。
+- **不带脚本。** 浏览页不含 JavaScript 与任何外部资源；响应带 `default-src 'none'`、`frame-ancestors 'none'` 与 `Referrer-Policy: no-referrer`。所有插值的名称都做 HTML 转义。
+- **有上限。** 列表 5000 条、归档 20000 条 / 2 GiB / 单文件 64 MiB、多选 200 条；超限直接拒绝而不是静默截断。
+- **仍需要会话。** 请求必须指名一个真实会话；它的工作区根目录是默认目录。
+
+如果这个读取范围对某个部署来说太宽，就不要在那里安装本插件，或者把 `dsh web` 绑在回环地址并放在带认证的反向代理之后。卸载插件即移除该能力。
 
 ## 兼容性
 
@@ -108,27 +123,25 @@ npm run contract  # 只跑上游钩子 contract
 
 | 路径 | 作用 |
 |---|---|
-| `lib/index.js` | 宿主半区：认证路由、会话作用域解析、分页流、失败映射 |
-| `lib/client.js` | 浏览器半区：回合链式 slot 条目与 DOM 装饰 |
+| `lib/index.js` | 宿主半区：会话作用域解析、`ctx.fs` 读取、JSON 列表、流式下载、HTML 浏览页、ZIP 写入器、失败映射 |
+| `lib/client.js` | 浏览器半区：侧边栏页签类型与页签体、回合下拉、DOM 装饰 |
 | `cordis.patch.yml` | 本 bundle 挂载的唯一一条双面行 |
-| `tests/host.test.mjs` | 用假 context 验证路由：流式、响应头、`HEAD`、失败分支 |
-| `tests/client.test.mjs` | 浏览器半区：模块加载注册、回合文件选择、装饰过程 |
-| `tests/validate.mjs` | 对 manifest、patch、两个 bundle 的静态接线检查 |
-| `tests/contract.mjs` | 针对已安装 DSH 的上游钩子检查 |
+| `tests/host.test.mjs` | 用假 `ctx.fs` 验证路由行为，含 ZIP 结构解析 |
+| `tests/client.test.mjs` | 浏览器半区：模块加载注册、页签注册、URL 与地址构造、装饰过程 |
+| `tests/validate.mjs` | 静态接线检查 |
+| `tests/contract.mjs` | 上游钩子检查 |
 | `tests/hygiene.test.mjs` | 对已跟踪文件的泄漏防护 |
 
 浏览器半区是手写的 `window.__ModuleLoader__.load({ id, factory })` 形态，只依赖平台种子 `react` 与 `react/jsx-runtime`。没有打包器、没有 `prepare` 脚本、没有需要安装的依赖。
 
 ## 已知边界
 
-- **没有 Range 与断点续传。** 下载中断就得重来，超大文件需要稳定连接。落盘是浏览器的事，但 `Range` 尚未实现。
+- **没有写操作。** 浏览器不能上传、重命名、删除或编辑。变更类操作属于 agent，或属于另一个插件。
+- **没有 Range 与断点续传。** 下载中断就得重来，超大文件需要稳定连接。
+- **归档上限是硬限制。** 超过 20000 条、2 GiB，或单文件超过 64 MiB 的目录会被拒绝，而不是流式输出。
+- **符号链接与特殊文件会被跳过**，列举与归档都不跟随。
 - **全部下载是一串并发下载。** 一轮文件很多时浏览器可能询问权限或拦掉多余的下载；逐个下载始终可靠。
-- **只支持普通文件。** 目录、符号链接与特殊文件会被预览所用的同一套服务拒绝；没有打包归档。
 - **回合文件列表受官方行约束。** 只有官方交付行会显示的文件才会被列出：成功的首方变更工具与显式 `present` 声明。
-
-## 相关项目
-
-生态里已有若干通过自带面板提供文件浏览或下载的插件。本插件刻意不再加一个面板：它扩展官方界面，因此能与你已在用的任何侧边栏或面板插件共存。
 
 ## 许可证
 

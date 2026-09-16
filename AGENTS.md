@@ -6,8 +6,8 @@ Guidance for agents (and humans) working in this repository. `README.md` explain
 
 A single DSH plugin, shipped as a plain ESM package with two halves:
 
-- `lib/index.js` — the host half. One authenticated Fetch route on Connection plus paged reads through the `workspaceFiles` service.
-- `lib/client.js` — the browser half. One official slot occupant plus DOM decorations over published `data-*` hooks.
+- `lib/index.js` — the host half. Authenticated Fetch routes on Connection, reading and listing through the composed `ctx.fs` service, plus a hand-written streaming ZIP writer.
+- `lib/client.js` — the browser half. A Sidebar tab type registered through the official registry, one official slot occupant, and DOM decorations over published `data-*` hooks.
 
 There is no build step, no bundler, no dependency, and no `prepare` script. Keep it that way: the package is installed by `dsh plugin add` from a checkout or from GitHub, and a build step turns a one-command install into a toolchain problem.
 
@@ -15,27 +15,30 @@ There is no build step, no bundler, no dependency, and no `prepare` script. Keep
 
 These are not style preferences. Each one is load-bearing for security or for surviving a DSH upgrade.
 
-1. **Bytes never enter JavaScript.** Every download is a same-origin URL handed to the browser. Do not fetch content into a Blob, do not buffer a whole file, do not base64 anything into the client.
-2. **The route stays behind Connection's fence.** Register on `connection.fetch.register`. Never register a raw unauthenticated `webServer` route, and never add a query-token scheme of your own.
-3. **Read-only.** No upload, no write, no delete, no directory listing. The only host capability used is `workspaceFiles.stat` and `workspaceFiles.readBytes`.
-4. **Same authority as the official preview.** Resolve the Session scope the way the Remote layer does (live header, else persistence `stat`), and let `workspaceFiles` perform every check. Do not resolve paths yourself against `process.cwd()`.
-5. **Errors leak nothing.** Short fixed strings only; no resolved paths, no messages from thrown errors, no stack traces.
-6. **The browser half requires only platform seeds.** `react` and `react/jsx-runtime` are seeded by the shell's module table; anything else must not be `require`d. A missing module throws during boot and the whole GUI fails to load.
-7. **The client `inject` list names real services.** Every name in `exports.inject` must be provided by the shipped client plane. A name that never appears leaves the plugin fiber pending, and the shell's boot assertion turns that into a failed page. Check `tests/contract.mjs` when adding one.
-8. **DOM injection is append-only.** Append injected nodes at the end of their container. Never insert between React-managed siblings, never mutate React-owned attributes, and never remove or reorder official nodes. Every injected node carries `data-dsh-download`, and every effect removes what it added.
-9. **Official-first.** Prefer an official slot to a DOM decoration whenever a slot exists. A decoration must depend only on published `data-*` hooks, and the contract test must cover the hook it uses.
-10. **No forks of official components.** If a surface needs a change that only a fork would allow, that is a signal to open an upstream issue or to add a smaller entry point, not to vendor a component.
+1. **Bytes never enter JavaScript.** A single download, a folder archive, and a multi-selection all hand a URL or a form to the browser, which streams the response to disk. Do not fetch content into a Blob, do not buffer an archive in page memory, do not base64 a file into the client.
+2. **Every route stays behind Connection's fence.** Register on `connection.fetch.register`. Never add a raw unauthenticated `webServer` route, and never add a query-token scheme of your own.
+3. **Read-only.** No upload, no write, no delete, no rename, no shell. The plugin exposes reads and archives only; anything mutating belongs to the agent or to a different plugin.
+4. **Reads go through `ctx.fs`.** Never touch `node:fs` directly. The composed filesystem owns path resolution, regular-file checks, `FS_*` error vocabulary, and symlink behavior, and it is what a sandboxing backend wraps.
+5. **Widened scope is a deliberate, documented decision.** Directory listing is not confined to the Session workspace, because a headless host must be able to hand over files that live beside it. Any new route that reaches further must say so in `README.md` under Security, in the module doc, and in the route table.
+6. **Errors leak nothing.** Short fixed strings only; no resolved paths, no messages from thrown errors, no stack traces.
+7. **Bounds are enforced host-side.** A listing, an archive, and a selection each carry a hard cap and refuse over-cap work instead of truncating silently. Do not let the client be the guard.
+8. **The browse page ships no script.** No inline script, no external resource, no event attribute. It carries `default-src 'none'`, escapes every interpolated value, and never reflects a path into a URL that did not come from a listing entry.
+9. **The browser half requires only platform seeds.** `react` and `react/jsx-runtime` are seeded by the shell's module table; anything else must not be `require`d. A missing module throws during boot and the whole GUI fails to load.
+10. **The client `inject` list names real services.** Every name in `exports.inject` must be provided by the shipped client plane. A name that never appears leaves the plugin fiber pending, and the shell's boot assertion turns that into a failed page. Check `tests/contract.mjs` when adding one.
+11. **DOM injection is append-only.** Append injected nodes at the end of their container. Never insert between React-managed siblings, never mutate React-owned attributes, and never remove or reorder official nodes. Every injected node carries `data-dsh-download`, and every effect removes what it added.
+12. **Official-first.** Prefer an official slot, the tab registry, or an official service to a DOM decoration. A decoration must depend only on published `data-*` hooks, and the contract test must cover the hook it uses.
+13. **No forks of official components.** If a surface needs a change that only a fork would allow, that is a signal to open an upstream issue or to add a smaller entry point, not to vendor a component.
 
 ## Layout
 
 | Path | Role |
 |---|---|
-| `lib/index.js` | host half: `DOWNLOAD_PATH`, scope resolution, `fileStream`, `downloadResponse`, `failureResponse`, `apply` |
-| `lib/client.js` | browser half: module-loader bundle, locale dictionaries, `TurnDownload`, DOM decorators |
+| `lib/index.js` | host half: constants, `resolveScope`, `resolveTarget`, `fsStatus`/`fsFailure`, `fileStream`, `listResponse`, `downloadResponse`, `browseResponse`/`renderBrowsePage`, the ZIP writer (`crc32`, headers, `archiveStream`), `archiveResponse`, `archiveSelectionResponse`, `apply` |
+| `lib/client.js` | browser half: module-loader bundle, locale dictionaries, URL/address builders, `TurnDownload`, `BrowserBody`/`BrowserTitle`/`browserDefinition`, `installStyles`, `installDecorators` |
 | `cordis.patch.yml` | the one dual-face row this bundle mounts |
 | `tests/resolve-dsh.mjs` | locate the DSH install a profile actually runs |
-| `tests/host.test.mjs` | route behavior with a fake context |
-| `tests/client.test.mjs` | browser-half registration, turn-file selection, decoration pass |
+| `tests/host.test.mjs` | route behavior against a fake `ctx.fs`, plus ZIP structure parsing |
+| `tests/client.test.mjs` | browser half loaded through a stub module loader |
 | `tests/validate.mjs` | static wiring checks |
 | `tests/contract.mjs` | upstream hook checks |
 | `tests/hygiene.test.mjs` | leak guard over tracked files |
@@ -53,17 +56,26 @@ Manual end-to-end check:
 
 ```sh
 dsh plugin --profile web add "$PWD"
-# restart dsh web, open a session, produce a file, use each entry point
+# restart dsh web, open the Sidebar file browser, then download a file, a folder,
+# and a multi-selection; also try the server-rendered browse page
 dsh plugin --profile web remove dsh-file-download
 ```
 
 ## Adding a surface
 
-1. Check whether an official slot exists. If it does, register there and stop.
+1. Check whether an official slot, tab type, or service exists. If it does, use it and stop.
 2. Otherwise identify the most stable published hook you can anchor to. Prefer a `data-*` attribute over a class name; class names are content-hashed.
 3. Append, never interleave. Re-apply from a single `MutationObserver`, and make the disposer remove every node and listener you added.
 4. Add the hook to `tests/contract.mjs` so a DSH upgrade fails loudly instead of silently dropping the surface.
 5. Add a static assertion to `tests/validate.mjs` so an accidental rename fails without a browser.
+
+## Adding a route
+
+1. Put it under `/api/workspace.download/…` and register it on the Connection Fetch table.
+2. Validate the query, resolve the Session, then resolve the target through `ctx.fs`.
+3. Map failures with `fsStatus`/`archiveFailure`; add a case for any new error code rather than falling through to 500.
+4. Bound the response: window reads, entry caps, byte caps. State the cap in the route table.
+5. Cover it in `tests/host.test.mjs`, including the failure branches, and in `tests/validate.mjs` for the wiring.
 
 ## DSH upgrades
 
@@ -71,8 +83,8 @@ DSH is a moving target. After every upgrade:
 
 1. `npm test` and note the current state.
 2. Upgrade DSH, then `npm test` again.
-3. Green means nothing to do. Red names the exact hook that moved; update the selector or the route contract, then re-run.
-4. If an upstream release adds a native download entry point, prefer removing a decoration over keeping two.
+3. Green means nothing to do. Red names the exact hook that moved; update the selector, the service method, or the route contract, then re-run.
+4. If an upstream release ships a native file browser or download entry point, prefer removing one of ours over keeping two.
 
 ## Commits and reviews
 
@@ -86,5 +98,5 @@ DSH is a moving target. After every upgrade:
 
 - Do not patch an installed DSH package; the fix belongs in this repository or upstream.
 - Do not add a dependency to save a few lines. The whole host half is Node built-ins plus the injected services.
-- Do not add a panel. The point of this plugin is that it extends the official surfaces and composes with whatever sidebar the user runs.
-- Do not widen file access. If a file is not readable through the Session's own filesystem, it is not downloadable.
+- Do not add a mutating action. If a write surface is ever wanted, it needs its own threat model, its own invariants, and its own review — not a quiet route addition here.
+- Do not weaken the read fence to make a test pass. If a route cannot be authenticated, it does not ship.
