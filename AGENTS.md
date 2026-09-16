@@ -17,23 +17,24 @@ These are not style preferences. Each one is load-bearing for security or for su
 
 1. **Bytes never enter JavaScript.** A single download, a folder archive, and a multi-selection all hand a URL or a form to the browser, which streams the response to disk. Do not fetch content into a Blob, do not buffer an archive in page memory, do not base64 a file into the client.
 2. **Every route stays behind Connection's fence.** Register on `connection.fetch.register`. Never add a raw unauthenticated `webServer` route, and never add a query-token scheme of your own.
-3. **Read-only.** No upload, no write, no delete, no rename, no shell. The plugin exposes reads and archives only; anything mutating belongs to the agent or to a different plugin.
-4. **Reads go through `ctx.fs`.** Never touch `node:fs` directly. The composed filesystem owns path resolution, regular-file checks, `FS_*` error vocabulary, and symlink behavior, and it is what a sandboxing backend wraps.
-5. **Widened scope is a deliberate, documented decision.** Directory listing is not confined to the Session workspace, because a headless host must be able to hand over files that live beside it. Any new route that reaches further must say so in `README.md` under Security, in the module doc, and in the route table.
-6. **Errors leak nothing.** Short fixed strings only; no resolved paths, no messages from thrown errors, no stack traces.
-7. **Bounds are enforced host-side.** A listing, an archive, and a selection each carry a hard cap and refuse over-cap work instead of truncating silently. Do not let the client be the guard.
-8. **The browse page ships no script.** No inline script, no external resource, no event attribute. It carries `default-src 'none'`, escapes every interpolated value, and never reflects a path into a URL that did not come from a listing entry.
-9. **The browser half requires only platform seeds.** `react` and `react/jsx-runtime` are seeded by the shell's module table; anything else must not be `require`d. A missing module throws during boot and the whole GUI fails to load.
-10. **The client `inject` list names real services.** Every name in `exports.inject` must be provided by the shipped client plane. A name that never appears leaves the plugin fiber pending, and the shell's boot assertion turns that into a failed page. Check `tests/contract.mjs` when adding one.
-11. **DOM injection is append-only.** Append injected nodes at the end of their container. Never insert between React-managed siblings, never mutate React-owned attributes, and never remove or reorder official nodes. Every injected node carries `data-dsh-download`, and every effect removes what it added.
-12. **Official-first.** Prefer an official slot, the tab registry, or an official service to a DOM decoration. A decoration must depend only on published `data-*` hooks, and the contract test must cover the hook it uses.
-13. **No forks of official components.** If a surface needs a change that only a fork would allow, that is a signal to open an upstream issue or to add a smaller entry point, not to vendor a component.
+3. **Writes are mode-gated and narrow.** The only write is one uploaded file into an existing directory: no rename, delete, move, in-place edit, permission change, or shell. The access mode is `read-only` (refuse), `workspace-write` (confine to the Session workspace), or `danger-full-access` (anywhere writable), and the host re-resolves it from the Session's sandbox policy on every request. A client-supplied mode is a user preference, never the guard: containment is re-checked server-side on every write.
+4. **Reads go through `ctx.fs`, and so does a text write.** Never touch `node:fs` directly for either. The composed filesystem owns path resolution, regular-file checks, `FS_*` error vocabulary, and symlink behavior, and it is what a sandboxing backend wraps. The one exception is a binary upload, which has no byte-write seam in that contract; it uses the documented local temp-and-rename path, and its README limitation must stay truthful.
+5. **Reads are unconfined; only writes are gated.** Directory listing deliberately leaves the Session workspace, because a headless host must be able to hand over files that live beside it. Do not add read confinement to a mode: the mode is an upload policy. Any new route that reaches further must say so in `README.md` under Security, in the module doc, and in the route table.
+6. **An upload validates before it writes.** Reject an empty name, `.`, `..`, a separator, or a NUL before resolving anything; require the target directory to exist and be a directory; refuse an existing file unless `overwrite=1`; cap the body both from `Content-Length` and after reading. Never let a name escape its directory.
+7. **Errors leak nothing.** Short fixed strings only; no resolved paths, no messages from thrown errors, no stack traces.
+8. **Bounds are enforced host-side.** A listing, an archive, and a selection each carry a hard cap and refuse over-cap work instead of truncating silently. Do not let the client be the guard.
+9. **The browse page ships no script.** No inline script, no external resource, no event attribute. It carries `default-src 'none'`, escapes every interpolated value, and never reflects a path into a URL that did not come from a listing entry.
+10. **The browser half requires only platform seeds.** `react` and `react/jsx-runtime` are seeded by the shell's module table; anything else must not be `require`d. A missing module throws during boot and the whole GUI fails to load.
+11. **The client `inject` list names real services.** Every name in `exports.inject` must be provided by the shipped client plane. A name that never appears leaves the plugin fiber pending, and the shell's boot assertion turns that into a failed page. Check `tests/contract.mjs` when adding one.
+12. **DOM injection is append-only.** Append injected nodes at the end of their container. Never insert between React-managed siblings, never mutate React-owned attributes, and never remove or reorder official nodes. Every injected node carries `data-dsh-download`, and every effect removes what it added.
+13. **Official-first.** Prefer an official slot, the tab registry, or an official service to a DOM decoration. A decoration must depend only on published `data-*` hooks, and the contract test must cover the hook it uses.
+14. **No forks of official components.** If a surface needs a change that only a fork would allow, that is a signal to open an upstream issue or to add a smaller entry point, not to vendor a component.
 
 ## Layout
 
 | Path | Role |
 |---|---|
-| `lib/index.js` | host half: constants, `resolveScope`, `resolveTarget`, `fsStatus`/`fsFailure`, `fileStream`, `listResponse`, `downloadResponse`, `browseResponse`/`renderBrowsePage`, the ZIP writer (`crc32`, headers, `archiveStream`), `archiveResponse`, `archiveSelectionResponse`, `apply` |
+| `lib/index.js` | host half: constants, `resolveScope`, `resolveTarget`, `parseSandboxMode`/`sessionSandboxMode`/`modeGate`, `fsStatus`/`fsFailure`, `fileStream`, `listResponse`, `downloadResponse`, `browseResponse`/`renderBrowsePage`, the ZIP writer (`crc32`, headers, `archiveStream`), `archiveResponse`, `archiveSelectionResponse`, `uploadResponse`/`writeUpload`/`uploadFailure`, `apply` |
 | `lib/client.js` | browser half: module-loader bundle, locale dictionaries, URL/address builders, `TurnDownload`, `BrowserBody`/`BrowserTitle`/`browserDefinition`, `installStyles`, `installDecorators` |
 | `cordis.patch.yml` | the one dual-face row this bundle mounts |
 | `tests/resolve-dsh.mjs` | locate the DSH install a profile actually runs |
@@ -73,9 +74,10 @@ dsh plugin --profile web remove dsh-file-download
 
 1. Put it under `/api/workspace.download/…` and register it on the Connection Fetch table.
 2. Validate the query, resolve the Session, then resolve the target through `ctx.fs`.
-3. Map failures with `fsStatus`/`archiveFailure`; add a case for any new error code rather than falling through to 500.
-4. Bound the response: window reads, entry caps, byte caps. State the cap in the route table.
-5. Cover it in `tests/host.test.mjs`, including the failure branches, and in `tests/validate.mjs` for the wiring.
+3. If the route writes, resolve the effective mode and gate it (`read-only` refuses, `workspace-write` confines); if it only reads, do not gate it at all.
+4. Map failures with `fsStatus`/`archiveFailure`/`uploadFailure`; add a case for any new error code rather than falling through to 500.
+5. Bound the response: window reads, entry caps, byte caps. State the cap in the route table.
+6. Cover it in `tests/host.test.mjs`, including the failure branches, and in `tests/validate.mjs` for the wiring.
 
 ## DSH upgrades
 
@@ -98,5 +100,6 @@ DSH is a moving target. After every upgrade:
 
 - Do not patch an installed DSH package; the fix belongs in this repository or upstream.
 - Do not add a dependency to save a few lines. The whole host half is Node built-ins plus the injected services.
-- Do not add a mutating action. If a write surface is ever wanted, it needs its own threat model, its own invariants, and its own review — not a quiet route addition here.
+- Do not widen the write surface beyond one uploaded file into an existing directory. A rename, delete, or edit needs its own threat model, its own invariants, and its own review — not a quiet route addition here.
+- Do not enforce the access mode on the client. The browser's selector is a preference; the host decides.
 - Do not weaken the read fence to make a test pass. If a route cannot be authenticated, it does not ship.

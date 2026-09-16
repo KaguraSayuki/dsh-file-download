@@ -7,13 +7,15 @@ Thanks for considering a contribution. This plugin is small on purpose, and the 
 In scope:
 
 - Read-side browser features: navigation, filtering, hidden-entry handling, listing metadata, and the row actions that already exist (preview, download, folder ZIP, copy, reference).
+- The mode-gated upload: name validation, overwrite semantics, size caps, the mode matrix, and its error mapping.
 - New authenticated read routes and archive improvements: streaming, headers, failure mapping, cancellation, caps.
 - Compatibility updates when a DSH release moves one of the hooks listed in `tests/contract.mjs`.
 - Documentation fixes, including the Chinese README.
 
 Out of scope:
 
-- Any mutating action: upload, rename, delete, edit, chmod, move. Reads are the whole contract here; a write surface needs its own threat model and its own review.
+- Any mutating action beyond uploading one file into an existing directory: rename, delete, move, in-place edit, chmod, mkdir, symlink creation. Each needs its own threat model and its own review.
+- Read confinement. The access mode is an upload policy; browsing stays unconfined by design.
 - Access control beyond the Web GUI's own authentication. Do not add a second password, token scheme, or path allowlist that pretends to be a security boundary; document the read scope instead.
 - A second copy of `Open`/`Reveal` actions. If an official control already does something, do not duplicate it.
 - Bundling or vendoring official DSH components.
@@ -46,6 +48,8 @@ dsh plugin --profile web remove dsh-file-download
 
 Walk the Sidebar **Files** tab from the project root to `/` and back: open a file in the preview, download one, ZIP a folder, copy a path, insert a reference, then tick two entries — including a folder — and use **Download selected (ZIP)**. Repeat one of those through the server-rendered browse page with no GUI open.
 
+Then exercise uploads in each mode: `read-only` must refuse, `workspace-write` must refuse a target outside the workspace and accept one inside, and `danger-full-access` must accept both. Upload a text file, a binary file, and a file whose name already exists — the last must ask before overwriting.
+
 Non-happy paths worth one pass each: a filename with non-ASCII characters, a file larger than a few megabytes, a directory that is not readable, a path outside the workspace, an empty directory, and a Session whose file was deleted after delivery.
 
 ## Code style
@@ -57,6 +61,7 @@ Non-happy paths worth one pass each: a filename with non-ASCII characters, a fil
 - Read and list through `ctx.fs`; never reach for `node:fs`. The composed filesystem owns resolution, `FS_*` errors, and symlink behavior.
 - In `lib/client.js`, stay within the module-loader contract: one `window.__ModuleLoader__.load` call, `require`ing platform seeds only.
 - Keep the two copies of `basename`/`parentPath`/`breadcrumbsFor` (host and browser) in step; the host page and the tab must agree on how a path is displayed.
+- Keep the mode list and its default in step between host and browser, and keep enforcement on the host.
 
 Before opening a pull request, read `AGENTS.md`. Its invariants are the review checklist: bytes never enter JavaScript, every route stays authenticated and read-only, reads go through `ctx.fs`, caps are enforced host-side, the browse page ships no script, DOM injection is append-only, and every upstream hook is covered by the contract test.
 
