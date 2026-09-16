@@ -35,6 +35,7 @@ These are not style preferences. Each one is load-bearing for security or for su
 | `cordis.patch.yml` | the one dual-face row this bundle mounts |
 | `tests/resolve-dsh.mjs` | locate the DSH install a profile actually runs |
 | `tests/host.test.mjs` | route behavior with a fake context |
+| `tests/client.test.mjs` | browser-half registration, turn-file selection, decoration pass |
 | `tests/validate.mjs` | static wiring checks |
 | `tests/contract.mjs` | upstream hook checks |
 | `tests/hygiene.test.mjs` | leak guard over tracked files |

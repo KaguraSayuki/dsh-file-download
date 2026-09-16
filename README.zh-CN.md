@@ -100,7 +100,7 @@ DSH_MODULES=/path/to/node_modules npm run contract
 ```sh
 npm test          # 静态校验 + 单元测试 + 上游 contract
 npm run validate  # 只查 manifest、patch 与 bundle 接线
-npm run unit      # 只跑宿主路由单元测试
+npm run unit      # 只跑单元测试（宿主路由 + 浏览器半区）
 npm run contract  # 只跑上游钩子 contract
 ```
 
@@ -112,6 +112,7 @@ npm run contract  # 只跑上游钩子 contract
 | `lib/client.js` | 浏览器半区：回合链式 slot 条目与 DOM 装饰 |
 | `cordis.patch.yml` | 本 bundle 挂载的唯一一条双面行 |
 | `tests/host.test.mjs` | 用假 context 验证路由：流式、响应头、`HEAD`、失败分支 |
+| `tests/client.test.mjs` | 浏览器半区：模块加载注册、回合文件选择、装饰过程 |
 | `tests/validate.mjs` | 对 manifest、patch、两个 bundle 的静态接线检查 |
 | `tests/contract.mjs` | 针对已安装 DSH 的上游钩子检查 |
 | `tests/hygiene.test.mjs` | 对已跟踪文件的泄漏防护 |

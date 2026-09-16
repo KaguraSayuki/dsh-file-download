@@ -100,7 +100,7 @@ The contract test currently passes against DSH `0.1.5-rc.1`. After a DSH upgrade
 ```sh
 npm test          # static validation + unit tests + upstream contract
 npm run validate  # manifest, patch, and bundle wiring only
-npm run unit      # host route unit tests only
+npm run unit      # unit tests only (host route + browser half)
 npm run contract  # upstream hook contract only
 ```
 
@@ -112,6 +112,7 @@ Layout:
 | `lib/client.js` | browser half: the turn-tail slot entry and the DOM decorations |
 | `cordis.patch.yml` | the one dual-face row this bundle mounts |
 | `tests/host.test.mjs` | route contract with a fake context: streaming, headers, `HEAD`, failures |
+| `tests/client.test.mjs` | browser half: module-loader registration, turn-file selection, decoration pass |
 | `tests/validate.mjs` | static wiring checks over the manifest, patch, and bundles |
 | `tests/contract.mjs` | upstream hook checks against the installed DSH |
 | `tests/hygiene.test.mjs` | leak guard over tracked files |
