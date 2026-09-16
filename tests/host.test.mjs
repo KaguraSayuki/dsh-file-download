@@ -30,6 +30,7 @@ import {
 	contentTypeOf,
 	crc32,
 	downloadResponse,
+	expandHome,
 	fileStream,
 	listResponse,
 	parentPath,
@@ -589,4 +590,11 @@ test("a binary upload lands byte-for-byte and refuses to clobber", async () => {
 	assert.deepEqual(new Uint8Array(readFileSync(target.displayPath)), bytes);
 	await assert.rejects(() => writeUpload(ctx, scope, "danger-full-access", target, bytes, false, undefined), (error) => error.code === "EEXIST");
 	assert.equal(uploadFailure(Object.assign(new Error("x"), { code: "EEXIST" })).status, 409);
+});
+
+test("a leading tilde expands to the host home directory", () => {
+	assert.equal(expandHome("~/notes", "/opt/me"), "/opt/me/notes");
+	assert.equal(expandHome("~", "/opt/me"), "/opt/me");
+	assert.equal(expandHome("/etc/hosts", "/opt/me"), "/etc/hosts");
+	assert.equal(expandHome("src/app.js", "/opt/me"), "src/app.js");
 });
