@@ -90,6 +90,12 @@ check("browser half asks before overwriting", client.includes("upload.overwrite"
 check("browser half resolves a typed relative path", client.includes("function resolveDraft(") && client.includes("function isAbsolutePath("));
 check("browser half completes a typed path", client.includes("function splitDraft(") && client.includes("dsh-fb-suggest"));
 check("host half expands a leading tilde", host.includes("export function expandHome("));
+check("host half can resume a download", host.includes("export function parseRange(") && host.includes('"accept-ranges"') && host.includes("content-range"));
+check("host half streams archive entries", host.includes("export async function* archiveChunks(") && host.includes("function dataDescriptor("));
+check("host half stores already-compressed formats", host.includes("const STORED_EXTENSIONS") && host.includes("export function zipMethodFor("));
+check("host half measures compressibility instead of guessing", host.includes("deflateRawSync(sample, { level: 1 })"));
+check("host half never buffers a whole archive entry", !host.includes("readTargetBuffered"));
+check("host half compresses at the ordinary default level", host.includes("const ZIP_LEVEL = 6;"));
 check("host half resolves cold Sessions too", host.includes('ctx.get("sessionPersistence")'));
 
 check("browser half declares no build-time import beyond platform seeds", !/require\("(?!react|react\/jsx-runtime")/u.test(client));

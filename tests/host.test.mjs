@@ -30,15 +30,18 @@ import {
 	contentTypeOf,
 	crc32,
 	downloadResponse,
+	etagOf,
 	expandHome,
 	fileStream,
 	listResponse,
 	parentPath,
-	readTargetBuffered,
+	parseRange,
 	uploadFailure,
 	uploadResponse,
-	writeUpload
+	writeUpload,
+	zipMethodFor
 } from "../lib/index.js";
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as joinPath } from "node:path";
@@ -165,7 +168,11 @@ function parseZip(buffer) {
 		const dataStart = localOffset + 30 + localNameLength + localExtraLength;
 		const raw = buffer.subarray(dataStart, dataStart + compressedSize);
 		const data = name.endsWith("/") ? Buffer.alloc(0) : method === 8 ? inflateRawSync(raw) : Buffer.from(raw);
-		entries.push({ name, method, crc, compressedSize, uncompressedSize, data });
+		const descriptorAt = dataStart + compressedSize;
+		const descriptor = !name.endsWith("/") && buffer.readUInt32LE(descriptorAt) === 0x08074b50
+			? { crc: buffer.readUInt32LE(descriptorAt + 4), compressedSize: buffer.readUInt32LE(descriptorAt + 8), size: buffer.readUInt32LE(descriptorAt + 12), flags: buffer.readUInt16LE(localOffset + 6) }
+			: undefined;
+		entries.push({ name, method, crc, compressedSize, uncompressedSize, data, descriptor });
 	}
 	return entries;
 }
@@ -375,14 +382,15 @@ test("compressible files are deflated and incompressible ones are stored", async
 	const payload = Buffer.from("a".repeat(8192));
 	const noise = Buffer.from(Array.from({ length: 64 }, (_, index) => (index * 37) % 251));
 	const fs = fakeFs({
-		tree: { "/work": [{ name: "pack", type: "directory" }], "/work/pack": [{ name: "big.txt", type: "file" }, { name: "tiny.bin", type: "file" }] },
-		contents: { "/work/pack/big.txt": payload, "/work/pack/tiny.bin": noise }
+		tree: { "/work": [{ name: "pack", type: "directory" }], "/work/pack": [{ name: "big.txt", type: "file" }, { name: "tiny.png", type: "file" }] },
+		contents: { "/work/pack/big.txt": payload, "/work/pack/tiny.png": noise }
 	});
 	const { ctx } = fakeContext({ fs });
 	const entries = parseZip(Buffer.from(await (await archiveResponse(ctx, request(ARCHIVE_PATH, "sessionId=session-1&path=pack"))).arrayBuffer()));
-	assert.equal(entries.find((entry) => entry.name === "pack/big.txt").method, 8);
+	assert.equal(entries.find((entry) => entry.name === "pack/big.txt").method, 8, "text is deflated");
 	assert.deepEqual(entries.find((entry) => entry.name === "pack/big.txt").data, payload);
-	assert.deepEqual(entries.find((entry) => entry.name === "pack/tiny.bin").data, noise);
+	assert.equal(entries.find((entry) => entry.name === "pack/tiny.png").method, 0, "an already-compressed format is stored");
+	assert.deepEqual(entries.find((entry) => entry.name === "pack/tiny.png").data, noise);
 });
 
 test("a file path on the archive route is refused with a pointer to the file route", async () => {
@@ -415,10 +423,36 @@ test("archive limits refuse a runaway tree before streaming", async () => {
 		() => collectArchiveEntries(ctx, target, undefined, { maxBytes: 2 }),
 		(error) => error.code === "archive/too-large"
 	);
-	await assert.rejects(
-		() => readTargetBuffered(ctx, { targetKey: "/work/f0.txt", displayPath: "/work/f0.txt" }, 0, undefined),
-		(error) => error.code === "archive/file-too-large"
-	);
+});
+
+test("the ZIP method follows the entry's format and its first window", () => {
+	assert.equal(zipMethodFor("notes.md"), 8);
+	assert.equal(zipMethodFor("no-extension"), 8);
+	assert.equal(zipMethodFor("photo.PNG"), 0);
+	assert.equal(zipMethodFor("archive.tar.gz"), 0);
+	assert.equal(zipMethodFor("book.xlsx"), 0);
+	const text = Buffer.from("a".repeat(8192));
+	assert.equal(zipMethodFor("mystery.dat", text), 8, "a compressible sample is deflated");
+	assert.equal(zipMethodFor("mystery.dat", randomBytes(8192)), 0, "an incompressible sample is stored");
+	assert.equal(zipMethodFor("tiny.dat", Buffer.from([1, 2, 3])), 8, "too small to judge, so deflate");
+});
+
+test("an unknown incompressible format is stored rather than deflated", async () => {
+	const noise = randomBytes(20000);
+	const fs = fakeFs({
+		tree: { "/work": [{ name: "blob.dat", type: "file", size: noise.byteLength }] },
+		contents: { "/work/blob.dat": noise }
+	});
+	const { ctx } = fakeContext({ fs });
+	const entries = parseZip(Buffer.from(await (await archiveResponse(ctx, request(ARCHIVE_PATH, "sessionId=session-1&path="))).arrayBuffer()));
+	const entry = entries.find((item) => item.name === "work/blob.dat");
+	assert.equal(entry.method, 0);
+	assert.deepEqual(entry.data, noise);
+});
+
+test("CRC-32 continues across windows", () => {
+	const body = Buffer.from("0123456789", "utf8");
+	assert.equal(crc32(body.subarray(4), crc32(body.subarray(0, 4))), crc32(body));
 });
 
 test("a multi-select archive bundles every requested path", async () => {
@@ -597,4 +631,115 @@ test("a leading tilde expands to the host home directory", () => {
 	assert.equal(expandHome("~", "/opt/me"), "/opt/me");
 	assert.equal(expandHome("/etc/hosts", "/opt/me"), "/etc/hosts");
 	assert.equal(expandHome("src/app.js", "/opt/me"), "src/app.js");
+});
+
+test("a streamed entry carries the streaming flag and a matching data descriptor", async () => {
+	const fs = fakeFs({
+		tree: { "/work": [{ name: "a.txt", type: "file", size: 6 }] },
+		contents: { "/work/a.txt": Buffer.from("alpha\n") }
+	});
+	const { ctx } = fakeContext({ fs });
+	const entries = parseZip(Buffer.from(await (await archiveResponse(ctx, request(ARCHIVE_PATH, "sessionId=session-1&path="))).arrayBuffer()));
+	const entry = entries.find((item) => item.name === "work/a.txt");
+	assert.ok(entry.descriptor !== undefined, "a streamed entry must be closed by a data descriptor");
+	assert.equal(entry.descriptor.flags & 0x0008, 0x0008, "general purpose bit 3 marks the descriptor");
+	assert.equal(entry.descriptor.crc, entry.crc);
+	assert.equal(entry.descriptor.compressedSize, entry.compressedSize);
+	assert.equal(entry.descriptor.size, entry.uncompressedSize);
+});
+
+test("a file far larger than the old per-file cap streams without buffering the tree", async () => {
+	const body = Buffer.alloc(66 * 1024 * 1024, 7);
+	const fs = fakeFs({
+		tree: { "/work": [{ name: "huge.bin", type: "file", size: body.byteLength }] },
+		contents: { "/work/huge.bin": body }
+	});
+	const { ctx } = fakeContext({ fs });
+	const response = await archiveResponse(ctx, request(ARCHIVE_PATH, "sessionId=session-1&path="));
+	assert.equal(response.status, 200);
+	const entries = parseZip(Buffer.from(await response.arrayBuffer()));
+	const entry = entries.find((item) => item.name === "work/huge.bin");
+	assert.equal(entry.uncompressedSize, body.byteLength);
+	assert.equal(entry.data.byteLength, body.byteLength);
+	assert.ok(entry.compressedSize < body.byteLength / 100, "zeros must compress well");
+});
+
+test("a Range request answers 206 with only the asked-for bytes", async () => {
+	const body = Buffer.from("0123456789", "utf8");
+	const { ctx } = fakeContext({ fs: fakeFs({ contents: { "/work/a.txt": body } }) });
+	const response = await downloadResponse(ctx, new Request(`http://dsh.internal${DOWNLOAD_PATH}?sessionId=session-1&path=a.txt`, { headers: { range: "bytes=2-5" } }));
+	assert.equal(response.status, 206);
+	assert.equal(response.headers.get("content-range"), "bytes 2-5/10");
+	assert.equal(response.headers.get("content-length"), "4");
+	assert.equal(response.headers.get("accept-ranges"), "bytes");
+	assert.equal(await response.text(), "2345");
+});
+
+test("a suffix range asks for the tail and an open range for the rest", async () => {
+	const body = Buffer.from("0123456789", "utf8");
+	const { ctx } = fakeContext({ fs: fakeFs({ contents: { "/work/a.txt": body } }) });
+	const tail = await downloadResponse(ctx, new Request(`http://dsh.internal${DOWNLOAD_PATH}?sessionId=session-1&path=a.txt`, { headers: { range: "bytes=-3" } }));
+	assert.equal(tail.status, 206);
+	assert.equal(tail.headers.get("content-range"), "bytes 7-9/10");
+	assert.equal(await tail.text(), "789");
+	const open = await downloadResponse(ctx, new Request(`http://dsh.internal${DOWNLOAD_PATH}?sessionId=session-1&path=a.txt`, { headers: { range: "bytes=4-" } }));
+	assert.equal(open.headers.get("content-range"), "bytes 4-9/10");
+	assert.equal(await open.text(), "456789");
+});
+
+test("a range a browser would use to resume spans several read windows", async () => {
+	const body = Buffer.alloc(600 * 1024, 3);
+	const { ctx } = fakeContext({ fs: fakeFs({ contents: { "/work/big.bin": body } }) });
+	const response = await downloadResponse(ctx, new Request(`http://dsh.internal${DOWNLOAD_PATH}?sessionId=session-1&path=big.bin`, { headers: { range: "bytes=100000-500000" } }));
+	assert.equal(response.status, 206);
+	assert.equal(response.headers.get("content-length"), String(400001));
+	assert.equal((await response.arrayBuffer()).byteLength, 400001);
+});
+
+test("an unsatisfiable range answers 416 with the entity size", async () => {
+	const { ctx } = fakeContext({ fs: fakeFs({ contents: { "/work/a.txt": Buffer.from("0123456789", "utf8") } }) });
+	const response = await downloadResponse(ctx, new Request(`http://dsh.internal${DOWNLOAD_PATH}?sessionId=session-1&path=a.txt`, { headers: { range: "bytes=99-" } }));
+	assert.equal(response.status, 416);
+	assert.equal(response.headers.get("content-range"), "bytes */10");
+});
+
+test("If-Range with a stale validator serves the whole file again", async () => {
+	const body = Buffer.from("0123456789", "utf8");
+	const fs = fakeFs({ contents: { "/work/a.txt": body } });
+	const { ctx } = fakeContext({ fs });
+	const fresh = await downloadResponse(ctx, request(DOWNLOAD_PATH, "sessionId=session-1&path=a.txt"));
+	const etag = fresh.headers.get("etag");
+	assert.ok(etag !== null, "a full response must carry a validator");
+	const resumed = await downloadResponse(ctx, new Request(`http://dsh.internal${DOWNLOAD_PATH}?sessionId=session-1&path=a.txt`, { headers: { range: "bytes=5-", "if-range": etag } }));
+	assert.equal(resumed.status, 206);
+	const stale = await downloadResponse(ctx, new Request(`http://dsh.internal${DOWNLOAD_PATH}?sessionId=session-1&path=a.txt`, { headers: { range: "bytes=5-", "if-range": '"something-else"' } }));
+	assert.equal(stale.status, 200);
+	assert.equal(await stale.text(), "0123456789");
+});
+
+test("HEAD with a range answers 206 and no body", async () => {
+	const { ctx } = fakeContext({ fs: fakeFs({ contents: { "/work/a.txt": Buffer.from("0123456789", "utf8") } }) });
+	const response = await downloadResponse(ctx, new Request(`http://dsh.internal${DOWNLOAD_PATH}?sessionId=session-1&path=a.txt`, { method: "HEAD", headers: { range: "bytes=0-3" } }));
+	assert.equal(response.status, 206);
+	assert.equal(response.body, null);
+	assert.equal(response.headers.get("content-length"), "4");
+});
+
+test("a full response advertises range support, and a ZIP says ranges do not apply", async () => {
+	const { ctx } = fakeContext({ fs: fakeFs({ tree: { "/work": [] }, contents: { "/work/a.txt": Buffer.from("x", "utf8") } }) });
+	const file = await downloadResponse(ctx, request(DOWNLOAD_PATH, "sessionId=session-1&path=a.txt"));
+	assert.equal(file.headers.get("accept-ranges"), "bytes");
+	assert.equal(file.status, 200);
+	const zip = await archiveResponse(ctx, request(ARCHIVE_PATH, "sessionId=session-1&path="));
+	assert.equal(zip.headers.get("accept-ranges"), "none");
+});
+
+test("the range parser refuses what it cannot honour", () => {
+	assert.deepEqual(parseRange("bytes=2-5", 10), { start: 2, end: 5 });
+	assert.deepEqual(parseRange("bytes=-3", 10), { start: 7, end: 9 });
+	assert.deepEqual(parseRange("bytes=4-", 10), { start: 4, end: 9 });
+	assert.equal(parseRange("bytes=99-", 10), null);
+	assert.equal(parseRange("items=1-2", 10), undefined);
+	assert.equal(parseRange("bytes=0-1,3-4", 10), undefined);
+	assert.equal(parseRange(undefined, 10), undefined);
 });
