@@ -243,6 +243,25 @@ test("read URLs carry no mode, because reads are never confined", () => {
 	}
 });
 
+test("a typed path resolves against the folder on screen, or stays absolute", () => {
+	const { module } = loadClient();
+	assert.equal(module.resolveDraft("src/app.js", "/work"), "/work/src/app.js");
+	assert.equal(module.resolveDraft("/etc/hosts", "/work"), "/etc/hosts");
+	assert.equal(module.resolveDraft("~/notes", "/work"), "~/notes");
+	assert.equal(module.resolveDraft("  ../x  ", "/work/sub"), "/work/sub/../x");
+	assert.equal(module.resolveDraft("", "/work"), null);
+	assert.equal(module.resolveDraft("c", "/"), "/c");
+	assert.equal(module.isAbsolutePath("C:\\x"), true);
+	assert.equal(module.isAbsolutePath("src"), false);
+});
+
+test("the completion split keeps the directory and the prefix apart", () => {
+	const { module } = loadClient();
+	assert.deepEqual({ ...module.splitDraft("/etc/hos") }, { dir: "/etc/", prefix: "hos" });
+	assert.deepEqual({ ...module.splitDraft("src") }, { dir: "", prefix: "src" });
+	assert.deepEqual({ ...module.splitDraft("~/Doc") }, { dir: "~/", prefix: "Doc" });
+});
+
 test("preview addresses encode one segment at a time and keep the drive colon", () => {
 	const { module } = loadClient();
 	assert.equal(module.sessionFileAddress("session-1", "out/report file.md"), "dsh-resource://file/session/session-1/out/report%20file.md");

@@ -87,6 +87,9 @@ check("host half refuses to clobber without the flag", host.includes('kind: "cre
 check("browser half has a mode selector", client.includes('t(`mode.${value}`)') && client.includes("modeStorageKey("));
 check("browser half uploads files with the mode", client.includes("uploadFiles") && client.includes("uploadUrl(sessionId, displayPath, file.name, effectiveMode"));
 check("browser half asks before overwriting", client.includes("upload.overwrite"));
+check("browser half resolves a typed relative path", client.includes("function resolveDraft(") && client.includes("function isAbsolutePath("));
+check("browser half completes a typed path", client.includes("function splitDraft(") && client.includes("dsh-fb-suggest"));
+check("host half expands a leading tilde", host.includes("export function expandHome("));
 check("host half resolves cold Sessions too", host.includes('ctx.get("sessionPersistence")'));
 
 check("browser half declares no build-time import beyond platform seeds", !/require\("(?!react|react\/jsx-runtime")/u.test(client));
