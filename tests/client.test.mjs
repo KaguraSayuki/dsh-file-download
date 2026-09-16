@@ -54,8 +54,17 @@ function fakeElement(tag) {
 	};
 }
 
-/** Load the bundle and materialize its factory with the platform seeds. */
-function loadClient() {
+/**
+ * Load the bundle and materialize its factory with the platform seeds.
+ *
+ * `statePlan` feeds React's `useState` in call order, so one mount can be
+ * rendered with a chosen state (a loaded listing, an editing path box) instead
+ * of only its first render. The effects run exactly as React would run them,
+ * which is what catches a reference that is read before it is declared.
+ * @param options - optional `useState` plan.
+ * @returns The registration, the materialized module, and the fake document.
+ */
+function loadClient({ statePlan = [] } = {}) {
 	let registration;
 	const window = { __ModuleLoader__: { load: (definition) => (registration = definition) } };
 	const document = {
@@ -71,6 +80,10 @@ function loadClient() {
 		window,
 		document,
 		URL,
+		AbortController,
+		setTimeout,
+		clearTimeout,
+		fetch: async () => ({ ok: false, status: 500, json: async () => ({}) }),
 		MutationObserver: class {
 			observe() {}
 			disconnect() {}
@@ -81,12 +94,23 @@ function loadClient() {
 	vm.createContext(sandbox);
 	vm.runInContext(SOURCE, sandbox);
 	assert.ok(registration !== undefined, "bundle must call __ModuleLoader__.load");
+	let stateIndex = 0;
 	const react = {
-		useState: () => [false, () => {}],
-		useEffect: () => {},
-		useRef: () => ({ current: null })
+		useState: (initial) => {
+			const planned = stateIndex < statePlan.length;
+			const value = planned ? statePlan[stateIndex] : typeof initial === "function" ? initial() : initial;
+			stateIndex += 1;
+			return [value, () => {}];
+		},
+		useEffect: (callback) => {
+			const cleanup = callback();
+			void cleanup;
+		},
+		useRef: (initial) => ({ current: initial }),
+		createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }),
+		Fragment: Symbol.for("react.fragment")
 	};
-	const jsxRuntime = { jsx: () => null, jsxs: () => null };
+	const jsxRuntime = { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) };
 	const module_ = registration.factory((specifier) => {
 		if (specifier === "react") return react;
 		if (specifier === "react/jsx-runtime") return jsxRuntime;
@@ -332,4 +356,58 @@ test("the decoration pass appends to published hooks and re-applies after remova
 	const cardButton = cards[0].children[1].children.find((child) => child.getAttribute("data-dsh-download") !== null);
 	assert.ok(cardButton !== undefined, "delivered-file card must gain a download segment");
 	assert.equal(cardButton.className, "dsh-dl-seg");
+});
+
+/** Props a session-scoped tab body receives, with the standard hooks stubbed. */
+function bodyProps(cwd = "/work") {
+	return {
+		sessionId: "session-1",
+		useSessions: (selector) => selector({ byId: { "session-1": cwd === undefined ? {} : { cwd } } }),
+		useTabInfo: () => ({ tab: { title: "Files", actions: { openResource: () => {} } } }),
+		useInput: (selector) => selector({ draft: "" }),
+		inputActions: { setDraft: () => {} },
+		t: (key) => key
+	};
+}
+
+test("the browser body renders on its first pass without throwing", () => {
+	const { module } = loadClient();
+	const tree = module.BrowserBody(bodyProps());
+	assert.equal(tree.type, "div");
+	assert.equal(tree.props.className, "dsh-fb");
+	assert.equal(module.BrowserBody(bodyProps(undefined)).props.className, "dsh-fb");
+});
+
+test("the browser body renders a loaded listing without throwing", () => {
+	const listing = {
+		path: "/work",
+		parent: "/",
+		workspaceRoot: "/work",
+		sessionMode: "workspace-write",
+		truncated: false,
+		entries: [
+			{ name: "src", type: "directory" },
+			{ name: ".hidden", type: "file" },
+			{ name: "a.txt", type: "file", size: 12 },
+			{ name: "socket", type: "other" }
+		]
+	};
+	// path = null keeps the tab on its workspace root; listing drives the rows.
+	const { module } = loadClient({ statePlan: [null, listing] });
+	const tree = module.BrowserBody(bodyProps());
+	assert.equal(tree.props.className, "dsh-fb");
+});
+
+test("the browser body renders the loaded state on an outside path too", () => {
+	const listing = { path: "/etc", parent: "/", workspaceRoot: "/work", sessionMode: "read-only", truncated: true, entries: [{ name: "hosts", type: "file", size: 4 }] };
+	const { module } = loadClient({ statePlan: ["/etc", listing, null, false, 0, false, "", new Set(), "", null, "read-only", false, false, [], -1] });
+	const tree = module.BrowserBody(bodyProps());
+	assert.equal(tree.props.className, "dsh-fb");
+});
+
+test("the tab title renders from the tab it is given", () => {
+	const { module } = loadClient();
+	const tree = module.BrowserTitle({ useTabInfo: () => ({ tab: { title: "Files" } }) });
+	assert.equal(tree.type, "span");
+	assert.equal(tree.props.className, "dsh-fb-title");
 });
