@@ -1,8 +1,8 @@
 {
   "name": "dsh-file-download",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "Authenticated browser download for DSH Web: stream any session-workspace file to the browser, wired into the official deliverables row, delivered-file cards, and the sidebar file tree. Remote-friendly — no host desktop required.",
+  "description": "File browser and download surface for the DSH Web GUI: browse the whole serving filesystem (including outside the session workspace), download files, archive folders and multi-selections as streamed ZIPs, all behind the GUI's own authentication.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
