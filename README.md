@@ -51,7 +51,7 @@ dsh plugin --profile web remove dsh-file-download
 
 Open the right Sidebar and pick **Files** from the tab guide.
 
-- **Project** jumps to the session workspace root; **Root** jumps to `/`. The path box accepts any absolute path: type it and press Enter.
+- **Project** jumps to the session workspace root; **Root** jumps to `/`. The breadcrumb row is also the path box: the pencil at its end opens an input, and a typed path is relative to the folder on screen unless it starts with `/` (absolute) or `~` (the host's home directory). Names complete as you type — arrows move, Tab takes one, Enter goes.
 - **Show hidden** reveals dotfiles, which are hidden by default. The filter box narrows the current directory without leaving it.
 - Clicking a folder enters it; clicking a file opens it in the official preview tab.
 - Row actions: preview, download, download ZIP (folders), copy path, and insert path into the composer. Inside the workspace the inserted text is an `@relative/path` reference; outside it is the absolute path.
