@@ -68,7 +68,7 @@ dsh plugin --profile web remove dsh-file-download
 | 路由 | 作用 |
 |---|---|
 | `GET /api/workspace.download/list?sessionId=&path=` | 任意可读目录的 JSON 列表：`{ path, parent, workspaceRoot, entries, truncated }` |
-| `GET\|HEAD /api/workspace.download?sessionId=&path=` | 单个普通文件，按 256 KiB 窗口流式返回，带 `Content-Disposition: attachment` |
+| `GET\|HEAD /api/workspace.download?sessionId=&path=` | 单个普通文件，按 256 KiB 窗口流式返回，带 `Content-Disposition: attachment`、`ETag`，以及 `Range` / `If-Range` 支持，浏览器的下载管理器据此续传 |
 | `GET /api/workspace.download/browse?sessionId=&path=` | 无脚本的 HTML 列表页，带面包屑与逐条目的下载/ZIP 链接 |
 | `GET\|HEAD /api/workspace.download/archive?sessionId=&path=` | 一个目录子树，流式打包为 ZIP |
 | `POST /api/workspace.download/archive` | 多选内容打包成一个 ZIP；接受 JSON，或名为 `payload` 的表单字段 |
@@ -98,9 +98,11 @@ dsh plugin --profile web remove dsh-file-download
 
 交付卡片与文件树按钮是对官方已发布钩子（`data-presented-file`、`data-files-entry`、`data-files-path`）的 DOM 装饰。每个注入节点都追加在容器末尾，而不是插进 React 管理的兄弟节点之间；`MutationObserver` 会在重渲染后重新施加装饰。卸载插件会移除全部注入节点。
 
-### 归档
+### 传输、续传与压缩
 
-ZIP 是直接基于 Node 的 `zlib` 手写的：每条目一个 local record，然后是中央目录与结束记录。同一时刻只缓冲一个文件，因此归档内存受单文件上限约束，而不是受整棵树大小约束。
+文件按 256 KiB 一个窗口读取。路由对 `Range` 请求回 `206` 与请求的那段字节，带上由文件版本与大小派生的 `ETag`，并尊重 `If-Range`：若文件已变，续传会被拒绝并改发完整文件。这正是浏览器自带下载管理器能续传的原因——客户端不需要自己实现。
+
+ZIP 直接基于 Node 的 `zlib` 手写：每条目一个 local record，条目内容按窗口直接流入 raw deflate 流，再用 data descriptor 收尾，最后是中央目录与结束记录。全程不缓冲整个文件，所以无论单个条目多大，归档内存都是一个 deflate 窗口加一个读窗口。条目按 zlib 的常规默认等级压缩。本已压缩的格式（图片、视频、音频、压缩包、Office 三件套、PDF）直接 store；其余条目先用 level 1 对首窗口试压一次，因此未知的二进制格式若压不动就直接 store，不会白烧 level 9 反而变大。归档响应声明 `Accept-Ranges: none`，因为现场生成的 ZIP 没有可用于续传的稳定字节身份。
 
 ## 安全
 
@@ -110,7 +112,7 @@ ZIP 是直接基于 Node 的 `zlib` 手写的：每条目一个 local record，�
 - **写操作受模式约束且有边界。** 唯一的写动作是把一个文件上传进一个已存在的目录。没有重命名、删除、移动、原地编辑、改权限，也没有 shell。`read-only` 拒绝一切写入；`workspace-write` 把写入限制在工作区内；`danger-full-access` 允许任意可写位置。宿主每次请求都重新检查，客户端从不作为唯一防线。
 - **不回显路径。** 错误体是固定的短字符串；解析后的路径或堆栈永不离开进程。
 - **不带脚本。** 浏览页不含 JavaScript 与任何外部资源；响应带 `default-src 'none'`、`frame-ancestors 'none'` 与 `Referrer-Policy: no-referrer`。所有插值的名称都做 HTML 转义。
-- **有上限。** 列表 5000 条、归档 20000 条 / 2 GiB / 单文件 64 MiB、多选 200 条、单次上传 64 MiB；超限直接拒绝而不是静默截断。
+- **有上限。** 列表 5000 条、归档 20000 条 / 总计 2 GiB、多选 200 条、单次上传 64 MiB；超限直接拒绝而不是静默截断。单个归档条目没有单独上限——它是流式写入的，不缓冲。
 - **仍需要会话。** 请求必须指名一个真实会话；它的工作区根目录是默认目录。
 
 如果这个读取范围对某个部署来说太宽，就不要在那里安装本插件，或者把 `dsh web` 绑在回环地址并放在带认证的反向代理之后。卸载插件即移除该能力。
@@ -152,8 +154,8 @@ npm run contract  # 只跑上游钩子 contract
 ## 已知边界
 
 - **写入口刻意很窄。** 上传只能往已存在的目录里加文件；不能建目录、重命名、移动、删除或原地编辑。建目录请交给 agent 或 shell 里的 `mkdir`。
-- **没有 Range 与断点续传。** 下载中断就得重来，超大文件需要稳定连接。
-- **归档上限是硬限制。** 超过 20000 条、2 GiB，或单文件超过 64 MiB 的目录会被拒绝，而不是流式输出。
+- **续传由浏览器负责。** 路由提供 `Range`，下载管理器据此续传；不用它的客户端就从头再来。现场生成的 ZIP 无法续传，因为两次请求之间没有稳定的字节身份。
+- **归档上限是硬限制。** 超过 20000 条或总计 2 GiB 的目录会被拒绝，而不是流式输出。总量上限是为了让所有偏移落在当前写出的 32 位字段内，这也是不需要 ZIP64 记录的原因；要抬高它就得实现 ZIP64。
 - **符号链接与特殊文件会被跳过**，列举与归档都不跟随。
 - **二进制上传假定本地执行世界。** 文本上传始终走组合文件系统；二进制上传由宿主进程写盘，因此如果后端执行世界不是本机（远程工作区），文本上传仍正确、二进制会上传到错误的位置。
 - **全部下载是一串并发下载。** 一轮文件很多时浏览器可能询问权限或拦掉多余的下载；逐个下载始终可靠。

@@ -68,7 +68,7 @@ Every route is registered on Connection's exact Fetch table, so all of them inhe
 | Route | Purpose |
 |---|---|
 | `GET /api/workspace.download/list?sessionId=&path=` | JSON listing of any readable directory: `{ path, parent, workspaceRoot, entries, truncated }` |
-| `GET\|HEAD /api/workspace.download?sessionId=&path=` | One regular file, streamed in 256 KiB windows, with `Content-Disposition: attachment` |
+| `GET\|HEAD /api/workspace.download?sessionId=&path=` | One regular file, streamed in 256 KiB windows, with `Content-Disposition: attachment`, an `ETag`, and `Range` / `If-Range` support so a browser download manager can resume an interrupted transfer |
 | `GET /api/workspace.download/browse?sessionId=&path=` | Script-free HTML listing with breadcrumbs and per-entry download/ZIP links |
 | `GET\|HEAD /api/workspace.download/archive?sessionId=&path=` | One directory subtree as a streamed ZIP |
 | `POST /api/workspace.download/archive` | A multi-selection as one ZIP; accepts JSON, or a form field named `payload` |
@@ -98,9 +98,11 @@ The turn dropdown is an occupant of the official `conversation.chat.turnTail` ch
 
 The delivered-file card and file-tree buttons are DOM decorations over hooks those packages already publish (`data-presented-file`, `data-files-entry`, `data-files-path`). Each injected node is appended at the end of its container rather than interleaved between React-managed siblings, and a `MutationObserver` re-applies decorations after a re-render. Removing the plugin removes every injected node.
 
-### Archives
+### Serving, resuming, and compression
 
-ZIP is written by hand over Node's `zlib`: one local record per entry, then the central directory and its end record. Only one file is buffered at a time, so archive memory stays bounded by the per-file cap rather than by the tree size.
+A file is read one 256 KiB window at a time. The route answers `Range` requests with `206` and the exact window asked for, carries an `ETag` derived from the file's version and size, and honours `If-Range` so a resume that would append to a changed file is refused and the whole file is sent instead. That is what makes the browser's own download manager able to resume: the client never has to implement it.
+
+ZIP is written by hand over Node's `zlib`: one local record per entry, the entry's body streamed window by window straight into a raw deflate stream, a data descriptor closing it, then the central directory and its end record. Nothing buffers a whole file, so archive memory is one deflate window plus one read window no matter how large an entry is. Entries are deflated at zlib's ordinary default level. Formats that are already compressed (images, video, audio, archives, the Office files, PDF) are stored outright, and every other entry is probed with a level-1 deflate of its first window, so an unknown binary format that does not compress is stored instead of spending level 9 to grow. Archive responses advertise `Accept-Ranges: none`, because a generated ZIP has no stable identity to resume against.
 
 ## Security
 
@@ -110,7 +112,7 @@ This plugin reads **any file the serving operating system account can read**, no
 - **Writes are mode-gated and bounded.** The only write is one uploaded file into an existing directory. There is no rename, delete, move, edit, permission change, or shell. `read-only` refuses every write; `workspace-write` confines writes to the Session workspace; `danger-full-access` allows any writable place. The host re-checks on every request; the client is never the guard.
 - **No path echo.** Error bodies are short fixed strings; a resolved path or a stack trace never leaves the process.
 - **No script.** The browse page ships no JavaScript and no external resource; it carries `default-src 'none'`, `frame-ancestors 'none'`, and `Referrer-Policy: no-referrer`. Every interpolated name is HTML-escaped.
-- **Bounded.** A listing is capped at 5000 entries, an archive at 20000 entries / 2 GiB / 64 MiB per file, a multi-selection at 200 paths, and an upload at 64 MiB; over-cap work is refused rather than silently truncated.
+- **Bounded.** A listing is capped at 5000 entries, an archive at 20000 entries / 2 GiB in total, a multi-selection at 200 paths, and an upload at 64 MiB; over-cap work is refused rather than silently truncated. A single entry has no size cap of its own — it is streamed, not buffered.
 - **Sessions are still named.** A request must name a real Session; its workspace root is the default directory.
 
 If that read scope is too wide for a deployment, do not install this plugin there, or run `dsh web` on loopback behind an authenticating reverse proxy. Removing the plugin removes the capability.
@@ -152,8 +154,8 @@ The browser half is hand-written in the `window.__ModuleLoader__.load({ id, fact
 ## Limitations
 
 - **Write scope is narrow by design.** Upload adds a file into an existing directory; it cannot create directories, rename, move, delete, or edit in place. Directories are created by the agent or by `mkdir` in a shell.
-- **No range requests or resume.** A download restarts if interrupted; very large files need a stable connection.
-- **Archive caps are hard.** A tree over 20000 entries, 2 GiB, or one file over 64 MiB is refused instead of streamed.
+- **Resume is the browser's.** The route serves `Range`, so the download manager resumes; a client that ignores it simply starts over. A generated ZIP cannot resume, because it has no stable byte identity between requests.
+- **Archive caps are hard.** A tree over 20000 entries or 2 GiB in total is refused instead of streamed. The total cap keeps every offset inside the 32-bit fields this writer emits, which is why no ZIP64 record is needed; raising it means implementing ZIP64.
 - **Symlinks and special files are skipped** rather than followed, in listings and archives alike.
 - **Binary uploads assume a local execution world.** A text upload always goes through the composed filesystem; a binary one is written by the host process, so a backend whose execution world is not this host (a remote workspace) would text-upload correctly but binary-upload to the wrong place.
 - **Download-all is a burst of downloads.** Browsers may ask for permission or block the extra downloads when a turn has many files; per-file downloads are always reliable.
