@@ -79,6 +79,14 @@ check("host half lists and reads through ctx.fs", host.includes("ctx.fs.listDir(
 check("host half exposes the JSON list route", host.includes('export const LIST_PATH = "/api/workspace.download/list"'));
 check("host half accepts a form-encoded selection", host.includes("application/x-www-form-urlencoded"));
 check("host half archives a multi-selection", host.includes("export async function archiveSelectionResponse"));
+check("host half exposes the upload route", host.includes('export const UPLOAD_PATH = "/api/workspace.download/upload"'));
+check("host half knows the three access modes", host.includes('export const SANDBOX_MODES = ["read-only", "workspace-write", "danger-full-access"]'));
+check("host half gates uploads by mode", host.includes("async function modeGate") && host.includes("uploads are disabled in read-only mode"));
+check("host half defaults to the Session mode", host.includes("export function sessionSandboxMode"));
+check("host half refuses to clobber without the flag", host.includes('kind: "createIfAbsent"') && host.includes('flag: "wx"'));
+check("browser half has a mode selector", client.includes('t(`mode.${value}`)') && client.includes("modeStorageKey("));
+check("browser half uploads files with the mode", client.includes("uploadFiles") && client.includes("uploadUrl(sessionId, displayPath, file.name, effectiveMode"));
+check("browser half asks before overwriting", client.includes("upload.overwrite"));
 check("host half resolves cold Sessions too", host.includes('ctx.get("sessionPersistence")'));
 
 check("browser half declares no build-time import beyond platform seeds", !/require\("(?!react|react\/jsx-runtime")/u.test(client));

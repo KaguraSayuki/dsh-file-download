@@ -18,6 +18,7 @@ import {
 	BROWSE_PATH,
 	DOWNLOAD_PATH,
 	LIST_PATH,
+	UPLOAD_PATH,
 	apply,
 	archiveResponse,
 	archiveSelectionResponse,
@@ -32,8 +33,14 @@ import {
 	fileStream,
 	listResponse,
 	parentPath,
-	readTargetBuffered
+	readTargetBuffered,
+	uploadFailure,
+	uploadResponse,
+	writeUpload
 } from "../lib/index.js";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as joinPath } from "node:path";
 
 /** Join one child onto an absolute directory path. */
 function childOf(parent, name) {
@@ -45,7 +52,7 @@ function childOf(parent, name) {
  * path that is not a directory) and a file map (`contents[path]` = Buffer).
  */
 function fakeFs({ tree = {}, contents = {} } = {}) {
-	const calls = { list: [], read: [] };
+	const calls = { list: [], read: [], writes: [] };
 	return {
 		calls,
 		resolve: async (path, opts) => {
@@ -54,6 +61,10 @@ function fakeFs({ tree = {}, contents = {} } = {}) {
 			return { targetKey: absolute, displayPath: absolute };
 		},
 		processPath: (target) => target.targetKey,
+		contains: (parent, child) => {
+			const root = String(parent.targetKey).replace(/\/+$/u, "");
+			return child.targetKey === root || String(child.targetKey).startsWith(`${root}/`);
+		},
 		stat: async (target, signal) => {
 			if (signal?.aborted) throw Object.assign(new Error("aborted"), { code: "FS_ABORTED" });
 			const path = target.targetKey;
@@ -81,18 +92,27 @@ function fakeFs({ tree = {}, contents = {} } = {}) {
 			const buffer = contents[target.targetKey];
 			if (buffer === undefined) throw Object.assign(new Error("not found"), { code: "FS_NOT_FOUND" });
 			return new Uint8Array(buffer.subarray(range.offset, range.offset + range.length));
+		},
+		writeText: async (target, content, intent, signal, policy) => {
+			if (signal?.aborted) throw Object.assign(new Error("aborted"), { code: "FS_ABORTED" });
+			calls.writes.push({ path: target.targetKey, content, intent, policy });
+			if (intent?.kind === "createIfAbsent" && (contents[target.targetKey] !== undefined || tree[target.targetKey] !== undefined)) {
+				throw Object.assign(new Error("exists"), { code: "FS_NOT_OBSERVED" });
+			}
+			contents[target.targetKey] = Buffer.from(content, "utf8");
+			return { operation: "create" };
 		}
 	};
 }
 
 /** A fake host context with only the services the routes read. */
-function fakeContext({ fs, live = true, sessionId = "session-1", workspaceRoot = "/work" }) {
+function fakeContext({ fs, live = true, sessionId = "session-1", workspaceRoot = "/work", sandboxMode = "danger-full-access" }) {
 	const registered = [];
 	const services = new Map([
 		["fs", fs],
 		["sessions", { get: (id) => (live && id === sessionId ? { header: { cwd: workspaceRoot } } : undefined) }],
 		["sessionPersistence", { stat: async () => undefined }],
-		["sandboxPolicy", { workspaceRoot }]
+		["sandboxPolicy", { workspaceRoot, resolve: () => ({ mode: sandboxMode, workspaceRoot }) }]
 	]);
 	return {
 		registered,
@@ -153,11 +173,12 @@ test("apply registers the exact authenticated routes", () => {
 	const { ctx, registered } = fakeContext({ fs: fakeFs({ tree: { "/work": [] } }) });
 	apply(ctx);
 	const byPath = new Map(registered.map((route) => [route.path, route]));
-	assert.deepEqual([...byPath.keys()].sort(), [ARCHIVE_PATH, BROWSE_PATH, DOWNLOAD_PATH, LIST_PATH].sort());
+	assert.deepEqual([...byPath.keys()].sort(), [ARCHIVE_PATH, BROWSE_PATH, DOWNLOAD_PATH, LIST_PATH, UPLOAD_PATH].sort());
 	assert.deepEqual(byPath.get(DOWNLOAD_PATH).methods, ["GET", "HEAD"]);
 	assert.deepEqual(byPath.get(LIST_PATH).methods, ["GET"]);
 	assert.deepEqual(byPath.get(BROWSE_PATH).methods, ["GET"]);
 	assert.deepEqual(byPath.get(ARCHIVE_PATH).methods, ["GET", "HEAD", "POST"]);
+	assert.deepEqual(byPath.get(UPLOAD_PATH).methods, ["POST"]);
 	for (const route of registered) assert.equal(route.requestBody, "buffered");
 });
 
@@ -467,4 +488,105 @@ test("a non-ASCII filename keeps both a fallback and its real name", () => {
 	const value = contentDisposition("实验报告.md");
 	assert.match(value, /filename="[^\u0080-\uffff]+"/u);
 	assert.ok(value.includes(`filename*=UTF-8''${encodeURIComponent("实验报告.md")}`));
+});
+
+/** One upload request whose body is the given bytes. */
+function uploadRequest(query, body, type = "application/octet-stream") {
+	return new Request(`http://dsh.internal${UPLOAD_PATH}?${query}`, {
+		method: "POST",
+		headers: { "content-type": type },
+		body
+	});
+}
+
+test("the list route reports the session's own mode as the browser default", async () => {
+	const fs = fakeFs({ tree: { "/work": [] } });
+	const { ctx } = fakeContext({ fs, sandboxMode: "workspace-write" });
+	const payload = await (await listResponse(ctx, new Request(`http://dsh.internal${LIST_PATH}?sessionId=session-1`, {}))).json();
+	assert.equal(payload.sessionMode, "workspace-write");
+});
+
+test("reads stay unconfined in every mode, including outside the workspace", async () => {
+	for (const sandboxMode of ["read-only", "workspace-write", "danger-full-access"]) {
+		const fs = fakeFs({ tree: { "/etc": [] }, contents: { "/etc/hosts": Buffer.from("x") } });
+		const { ctx } = fakeContext({ fs, sandboxMode });
+		assert.equal((await listResponse(ctx, new Request(`http://dsh.internal${LIST_PATH}?sessionId=session-1&path=%2Fetc`, {}))).status, 200, `list ${sandboxMode}`);
+		assert.equal((await browseResponse(ctx, request(BROWSE_PATH, "sessionId=session-1&path=%2Fetc"))).status, 200, `browse ${sandboxMode}`);
+		assert.equal((await downloadResponse(ctx, request(DOWNLOAD_PATH, "sessionId=session-1&path=%2Fetc%2Fhosts"))).status, 200, `download ${sandboxMode}`);
+		assert.equal((await archiveResponse(ctx, request(ARCHIVE_PATH, "sessionId=session-1&path=%2Fetc"))).status, 200, `archive ${sandboxMode}`);
+	}
+});
+
+test("an unknown upload mode is refused instead of silently defaulting", async () => {
+	const fs = fakeFs({ tree: { "/work": [] } });
+	const { ctx } = fakeContext({ fs });
+	const response = await uploadResponse(ctx, uploadRequest("sessionId=session-1&path=%2Fwork&name=a.txt&mode=root", "x", "text/plain"));
+	assert.equal(response.status, 400);
+	assert.equal(fs.calls.writes.length, 0);
+});
+
+test("a text upload writes through the filesystem with the mode policy", async () => {
+	const fs = fakeFs({ tree: { "/work": [] } });
+	const { ctx } = fakeContext({ fs, sandboxMode: "workspace-write" });
+	const response = await uploadResponse(ctx, uploadRequest("sessionId=session-1&path=%2Fwork&name=note.md", "# hi\n", "text/markdown"));
+	assert.equal(response.status, 200);
+	const payload = await response.json();
+	assert.equal(payload.encoding, "utf-8");
+	assert.equal(payload.bytes, 5);
+	assert.equal(fs.calls.writes.length, 1);
+	assert.equal(fs.calls.writes[0].path, "/work/note.md");
+	assert.equal(fs.calls.writes[0].content, "# hi\n");
+	assert.deepEqual(fs.calls.writes[0].intent, { kind: "createIfAbsent" });
+	assert.equal(fs.calls.writes[0].policy.mode, "workspace-write");
+	assert.equal(fs.calls.writes[0].policy.workspaceRoot, "/work");
+});
+
+test("an upload is refused in read-only mode", async () => {
+	const fs = fakeFs({ tree: { "/work": [] } });
+	const { ctx } = fakeContext({ fs, sandboxMode: "read-only" });
+	const response = await uploadResponse(ctx, uploadRequest("sessionId=session-1&path=%2Fwork&name=note.md", "x", "text/plain"));
+	assert.equal(response.status, 403);
+	assert.equal(fs.calls.writes.length, 0);
+});
+
+test("an upload outside the workspace is refused in workspace-write mode", async () => {
+	const fs = fakeFs({ tree: { "/etc": [] } });
+	const { ctx } = fakeContext({ fs, sandboxMode: "workspace-write" });
+	const response = await uploadResponse(ctx, uploadRequest("sessionId=session-1&path=%2Fetc&name=hosts", "x", "text/plain"));
+	assert.equal(response.status, 403);
+	assert.equal(fs.calls.writes.length, 0);
+});
+
+test("overwriting an existing file requires the overwrite flag", async () => {
+	const fs = fakeFs({ tree: { "/work": [] }, contents: { "/work/note.md": Buffer.from("old") } });
+	const { ctx } = fakeContext({ fs });
+	const created = await uploadResponse(ctx, uploadRequest("sessionId=session-1&path=%2Fwork&name=note.md", "new", "text/plain"));
+	assert.equal(created.status, 409);
+	assert.equal((await created.json()).exists, true);
+	const replaced = await uploadResponse(ctx, uploadRequest("sessionId=session-1&path=%2Fwork&name=note.md&overwrite=1", "new", "text/plain"));
+	assert.equal(replaced.status, 200);
+	assert.equal(fs.calls.writes.at(-1).intent, undefined);
+	assert.equal(fs.calls.writes.at(-1).content, "new");
+});
+
+test("an invalid file name is refused before any write", async () => {
+	const fs = fakeFs({ tree: { "/work": [] } });
+	const { ctx } = fakeContext({ fs });
+	for (const name of ["..", ".", "a%2Fb", "a%5Cb"]) {
+		const response = await uploadResponse(ctx, uploadRequest(`sessionId=session-1&path=%2Fwork&name=${name}`, "x", "text/plain"));
+		assert.equal(response.status, 400, `expected 400 for ${name}`);
+	}
+	assert.equal(fs.calls.writes.length, 0);
+});
+
+test("a binary upload lands byte-for-byte and refuses to clobber", async () => {
+	const dir = mkdtempSync(joinPath(tmpdir(), "dsh-upload-"));
+	const target = { targetKey: "binary", displayPath: joinPath(dir, "blob.bin") };
+	const ctx = { fs: { processPath: () => joinPath(dir, "blob.bin") } };
+	const scope = { sessionId: "session-1", workspaceRoot: dir };
+	const bytes = new Uint8Array([0, 1, 2, 255, 254]);
+	await writeUpload(ctx, scope, "danger-full-access", target, bytes, true, undefined);
+	assert.deepEqual(new Uint8Array(readFileSync(target.displayPath)), bytes);
+	await assert.rejects(() => writeUpload(ctx, scope, "danger-full-access", target, bytes, false, undefined), (error) => error.code === "EEXIST");
+	assert.equal(uploadFailure(Object.assign(new Error("x"), { code: "EEXIST" })).status, 409);
 });

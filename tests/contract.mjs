@@ -73,6 +73,14 @@ check("the filesystem contract still lists directories", fsTypes.includes("listD
 check("the filesystem contract still reads byte ranges", fsTypes.includes("readByteRange(target: FsTarget, range:"));
 check("the filesystem contract still reports FS_NOT_FOUND", fsValueTypes.includes("FS_NOT_FOUND"));
 check("the local backend still implements listDir", localFs.includes("async listDir(target, signal)"));
+check("the filesystem contract still writes text with an intent", fsTypes.includes("writeText(target: FsTarget, content: string, expected?: FsWriteIntent"));
+check("the filesystem contract still carries a sandbox policy per write", fsTypes.includes("sandboxPolicy?: SandboxExecutionPolicy") || fsValueTypes.includes("SandboxExecutionPolicy"));
+check("a create-if-absent intent still exists", fsValueTypes.includes("createIfAbsent"));
+const sandboxTypes = readFileSync(join(dirname(resolveFrom(modules, "@deepseek-ai/dsh-sandbox")), "types", "index.d.ts"), "utf8");
+check("the three sandbox modes are unchanged", sandboxTypes.includes("'read-only' | 'workspace-write' | 'danger-full-access'"));
+const sandboxPolicyTypes = readFileSync(join(dirname(resolveFrom(modules, "@deepseek-ai/dsh-sandbox-policy")), "types", "index.d.ts"), "utf8");
+check("the sandbox policy service still resolves per session", sandboxPolicyTypes.includes("resolve(request?: SandboxPolicyRequest)"));
+check("the sandbox policy still exposes the deployment default", sandboxPolicyTypes.includes("readonly defaultMode: SandboxMode"));
 check("directory entries still carry a resolved target", fsValueTypes.includes("target: FsTarget"));
 
 const sidebarRight = packageFile("@deepseek-ai/dsh-client-ui-sidebar-right", "client");

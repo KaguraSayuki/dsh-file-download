@@ -225,6 +225,24 @@ test("URL builders stay on this origin and name the host routes", () => {
 	assert.equal(new URL(module.downloadUrl("s1", "a.txt")).pathname, "/api/workspace.download");
 });
 
+test("the upload URL carries the directory, name, mode, and overwrite flag", () => {
+	const { module } = loadClient();
+	const url = new URL(module.uploadUrl("s1", "/work/sub", "note.md", "workspace-write", true));
+	assert.equal(url.pathname, "/api/workspace.download/upload");
+	assert.equal(url.searchParams.get("path"), "/work/sub");
+	assert.equal(url.searchParams.get("name"), "note.md");
+	assert.equal(url.searchParams.get("mode"), "workspace-write");
+	assert.equal(url.searchParams.get("overwrite"), "1");
+	assert.equal(new URL(module.uploadUrl("s1", "/work", "a.txt", "read-only", false)).searchParams.get("overwrite"), null);
+});
+
+test("read URLs carry no mode, because reads are never confined", () => {
+	const { module } = loadClient();
+	for (const url of [module.listUrl("s1", "/etc"), module.downloadUrl("s1", "/etc/hosts"), module.archiveUrl("s1", "/etc"), module.browseUrl("s1")]) {
+		assert.equal(new URL(url).searchParams.get("mode"), null, url);
+	}
+});
+
 test("preview addresses encode one segment at a time and keep the drive colon", () => {
 	const { module } = loadClient();
 	assert.equal(module.sessionFileAddress("session-1", "out/report file.md"), "dsh-resource://file/session/session-1/out/report%20file.md");
