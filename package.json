@@ -1,8 +1,8 @@
 {
   "name": "dsh-file-download",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "private": true,
-  "description": "File browser, download surface, and mode-gated upload for the DSH Web GUI: browse the whole serving filesystem, download files, archive folders and selections as streamed ZIPs, and upload with an overwrite prompt under a read-only / workspace-write / full-access policy that defaults to the session's own.",
+  "description": "File browser, download surface, and mode-gated upload for the DSH Web GUI: browse the whole serving filesystem, resume a download with Range, archive folders and selections as streamed ZIPs, and upload with an overwrite prompt under a read-only / workspace-write / full-access policy that defaults to the session's own.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
