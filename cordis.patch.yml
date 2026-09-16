@@ -1,0 +1,12 @@
+# dsh-file-download bundle patch.
+#
+# One dual-face row: the node half (exports ".") runs in the host process and
+# registers the authenticated download route on Connection, while the
+# `dsh.client` declaration in package.json makes the browser half
+# (exports "./client") load in the Web GUI.
+#
+# Install with `dsh plugin --profile web add <repo>`, which appends this package
+# to `dsh.profile.bundles` and thus applies this patch after the bundle layers.
+- insert:
+    - id: file-download
+      name: 'dsh-file-download'

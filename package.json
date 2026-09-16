@@ -1,0 +1,59 @@
+{
+  "name": "dsh-file-download",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Authenticated browser download for DSH Web: stream any session-workspace file to the browser, wired into the official deliverables row, delivered-file cards, and the sidebar file tree. Remote-friendly — no host desktop required.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "test": "node tests/validate.mjs && node --test tests/*.test.mjs && node tests/contract.mjs",
+    "validate": "node tests/validate.mjs",
+    "unit": "node --test tests/*.test.mjs",
+    "contract": "node tests/contract.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "deepseek",
+    "cordis",
+    "web-ui",
+    "download",
+    "file-download",
+    "workspace",
+    "plugin"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KaguraSayuki/dsh-file-download.git"
+  },
+  "homepage": "https://github.com/KaguraSayuki/dsh-file-download#readme",
+  "bugs": {
+    "url": "https://github.com/KaguraSayuki/dsh-file-download/issues"
+  }
+}
