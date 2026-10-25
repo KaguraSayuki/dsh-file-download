@@ -234,6 +234,7 @@ test("apply registers the Sidebar browser type, its body, the turn tail, and one
 	assert.equal(tabs[0].locale, "file-download");
 	assert.equal(titles.length, 1);
 	assert.equal(tails.length, 1);
+	assert.equal(tails[0].id, "file-download");
 	assert.equal(typeof tails[0].select, "function");
 	const styles = document.head.children.filter((node) => node.tagName === "STYLE");
 	assert.equal(styles.length, 1);
