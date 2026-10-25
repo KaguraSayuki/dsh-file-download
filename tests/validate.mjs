@@ -60,6 +60,7 @@ check("browser half uses the official turn-tail chain", client.includes('ctx.slo
 check("browser half decorates delivered-file cards", client.includes('"[data-presented-file]"'));
 check("browser half decorates file-tree rows", client.includes('li[data-files-entry][data-files-path]'));
 check("browser half archives directory rows", client.includes("saveArchive(currentSession(), path)"));
+check("browser half reads the persisted current-session selection", client.includes('"dsh.sessions.current"'));
 check("browser half links the browse page", client.includes("openBrowse(sessionId)"));
 check("host half exposes the browse page", host.includes('export const BROWSE_PATH = "/api/workspace.download/browse"'));
 check("host half exposes the folder archive route", host.includes('export const ARCHIVE_PATH = "/api/workspace.download/archive"'));

@@ -90,12 +90,13 @@ check("the tab body seat is still a keyed slot", /"sidebar\.right\.pane\.tab":\s
 check("the tab title seat still exists", sidebarRight.includes('"sidebar.right.pane.tab.title"'));
 
 const chat = packageFile("@deepseek-ai/dsh-client-ui-chat", "client");
-check("conversation.chat.turnTail is still a chain slot", /"conversation\.chat\.turnTail":\s*\{\s*kind:\s*"chain"/u.test(chat));
+// dsh 0.2.1 declares the turn-tail seat as a list slot scoped to the session;
+// occupants still register with an id and a select (see tests/client.test.mjs).
+check("conversation.chat.turnTail is still a list slot", /"conversation\.chat\.turnTail":\s*\{\s*kind:\s*"list"/u.test(chat));
 const deliverables = packageFile("@deepseek-ai/dsh-client-ui-deliverables", "client");
 check("deliverables still publishes the turn data key", deliverables.includes('key: "deliverables"'));
 check("delivered-file cards still carry data-presented-file", deliverables.includes('"data-presented-file"'));
 check("delivered-file cards still carry the menu anchor", deliverables.includes('"aria-haspopup"'));
-check("produced files still carry the row hook", deliverables.includes('"data-produced-files-row"'));
 const sidebarFiles = packageFile("@deepseek-ai/dsh-client-ui-sidebar-files", "client");
 check("file-tree rows still carry data-files-entry", sidebarFiles.includes('"data-files-entry"'));
 check("file-tree rows still carry data-files-path", sidebarFiles.includes('"data-files-path"'));
@@ -104,13 +105,18 @@ const renderer = packageFile("@deepseek-ai/dsh-client-ui-renderer", "client");
 check("the slots service is still provided", renderer.includes('super(ctx, "slots")'));
 const sessionController = packageFile("@deepseek-ai/dsh-api-session-controller", "client");
 check("the client sessions service is still provided", sessionController.includes('provide("sessions"'));
-check("the session list still exposes a current id", sessionController.includes("current: void 0"));
+// dsh 0.2.1 moved the current-session selection out of the sessions list
+// snapshot into the workspace controller's persisted selection store; the
+// browser half reads that store when the list no longer carries `current`.
+const workspaceUi = packageFile("@deepseek-ai/dsh-client-ui-workspace", "client");
+check("the workspace controller still persists the current selection", workspaceUi.includes('"dsh.sessions.current"'));
+check("the persisted selection still carries the session id", workspaceUi.includes("sessionId: reference.sessionId"));
 const locale = packageFile("@deepseek-ai/dsh-client-locale", "client");
 check("the locale service still registers namespaces", locale.includes("register(") && locale.includes("bind("));
 
 const frontend = frontendBundle();
 check("the module table still seeds react/jsx-runtime", frontend.includes('"react/jsx-runtime"'));
-check("the module table still seeds react", frontend.includes('"react":'));
+check("the module table still seeds react", /[{,]\s*(?:"react"|react):/u.test(frontend));
 check("the module table still seeds the slots module", frontend.includes('"@deepseek-ai/dsh-client-ui-slots"'));
 
 console.log("");

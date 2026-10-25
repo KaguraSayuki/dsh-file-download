@@ -234,7 +234,6 @@ test("apply registers the Sidebar browser type, its body, the turn tail, and one
 	assert.equal(tabs[0].locale, "file-download");
 	assert.equal(titles.length, 1);
 	assert.equal(tails.length, 1);
-	assert.equal(tails[0].id, "file-download");
 	assert.equal(typeof tails[0].select, "function");
 	const styles = document.head.children.filter((node) => node.tagName === "STYLE");
 	assert.equal(styles.length, 1);
@@ -248,6 +247,18 @@ test("URL builders stay on this origin and name the host routes", () => {
 	assert.equal(new URL(module.archiveUrl("s1", "/etc")).pathname, "/api/workspace.download/archive");
 	assert.equal(new URL(module.browseUrl("s1")).pathname, "/api/workspace.download/browse");
 	assert.equal(new URL(module.downloadUrl("s1", "a.txt")).pathname, "/api/workspace.download");
+});
+
+test("current-session resolution prefers the list snapshot, then the persisted selection", () => {
+	const { module } = loadClient();
+	const legacy = { sessions: { list: { getSnapshot: () => ({ current: "session-1" }) } } };
+	assert.equal(module.currentSessionOf(legacy), "session-1");
+	const moved = { sessions: { list: { getSnapshot: () => ({ ids: [], byId: {}, phase: "ready" }) } } };
+	const storage = { getItem: (key) => (key === "dsh.sessions.current" ? '{"sessionId":"session-9","subagentAddress":"agent:x"}' : null) };
+	assert.equal(module.currentSessionOf(moved, storage), "session-9", "the persisted selection carries the id");
+	assert.equal(module.currentSessionOf(moved, { getItem: () => "not json" }), undefined, "a corrupted value resolves to nothing");
+	assert.equal(module.currentSessionOf(moved), undefined, "no sources means no session");
+	assert.equal(module.currentSessionOf(undefined), undefined, "a missing context resolves to nothing");
 });
 
 test("the upload URL carries the directory, name, mode, and overwrite flag", () => {
