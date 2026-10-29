@@ -4,8 +4,8 @@
  * The plugin works by composing official seams: Connection's exact Fetch route
  * table, the `workspaceFiles` service, the `conversation.chat.turnTail` slot
  * (a chain or a list), the client-plane `sessions`/`slots`/`locale` services,
- * and three published `data-*` DOM hooks. DSH is a moving target, so every one
- * of those is
+ * the published `data-*` DOM hooks it decorates, and the hooks that name the
+ * Session owning them. DSH is a moving target, so every one of those is
  * re-checked here before an upgrade is trusted.
  *
  * When no DSH install can be found the test skips successfully, so CI does not
@@ -108,12 +108,13 @@ const renderer = packageFile("@deepseek-ai/dsh-client-ui-renderer", "client");
 check("the slots service is still provided", renderer.includes('super(ctx, "slots")'));
 const sessionController = packageFile("@deepseek-ai/dsh-api-session-controller", "client");
 check("the client sessions service is still provided", sessionController.includes('provide("sessions"'));
-// dsh 0.2.1 moved the current-session selection out of the sessions list
-// snapshot into the workspace controller's persisted selection store; the
-// browser half reads that store when the list no longer carries `current`.
-const workspaceUi = packageFile("@deepseek-ai/dsh-client-ui-workspace", "client");
-check("the workspace controller still persists the current selection", workspaceUi.includes('"dsh.sessions.current"'));
-check("the persisted selection still carries the session id", workspaceUi.includes("sessionId: reference.sessionId"));
+// A decoration downloads from the Session of the subtree it sits in. DSH 0.1.7+
+// names that owner on the conversation body and on every right-Sidebar Session
+// view; 0.1.5 names neither and renders one Session, the list snapshot's current.
+const conversation = packageFile("@deepseek-ai/dsh-client-ui-conversation", "client");
+const owners = conversation.includes('"data-conversation-session"') && sidebarRight.includes('"data-sidebar-right-session"');
+const listCurrent = sessionController.includes("current: void 0");
+check(`decorated nodes can still name their Session (${owners ? "owner hooks" : listCurrent ? "list current" : "neither"})`, owners || listCurrent);
 const locale = packageFile("@deepseek-ai/dsh-client-locale", "client");
 check("the locale service still registers namespaces", locale.includes("register(") && locale.includes("bind("));
 
