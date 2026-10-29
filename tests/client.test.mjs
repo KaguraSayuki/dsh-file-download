@@ -92,6 +92,7 @@ function loadClient({ statePlan = [], localStorage } = {}) {
 		addEventListener() {},
 		removeEventListener() {}
 	};
+	const observers = [];
 	const sandbox = {
 		window,
 		document,
@@ -101,6 +102,9 @@ function loadClient({ statePlan = [], localStorage } = {}) {
 		clearTimeout,
 		fetch: async () => ({ ok: false, status: 500, json: async () => ({}) }),
 		MutationObserver: class {
+			constructor(callback) {
+				observers.push(callback);
+			}
 			observe() {}
 			disconnect() {}
 		},
@@ -133,7 +137,7 @@ function loadClient({ statePlan = [], localStorage } = {}) {
 		if (specifier === "react/jsx-runtime") return jsxRuntime;
 		throw new Error(`browser half required an unexpected module: ${specifier}`);
 	});
-	return { registration, module: module_, document };
+	return { registration, module: module_, document, observers };
 }
 
 /**
@@ -535,6 +539,52 @@ test("a decoration click downloads from the Session that renders it, never a sha
 	injected(card).dispatch("click");
 	assert.equal(downloads.length, 4);
 	assert.equal(reads, 0, "the persisted selection is never consulted");
+});
+
+/** Every fake element below `root`, in document order. */
+function descendantsOf(root) {
+	return root.children.flatMap((child) => [child, ...descendantsOf(child)]);
+}
+
+/**
+ * `querySelector` over fake elements for the selector shapes the decorator
+ * uses: `tag[attr]` or `tag[attr="value"]` anywhere below the root, or behind
+ * `:scope > ` or `:scope > * > `, in a comma-separated list.
+ */
+function querySelectorIn(root, selectors) {
+	for (const selector of selectors.split(",").map((part) => part.trim())) {
+		const [, scope, tag, name, value] = /^(:scope > (?:\* > )?)?([a-z]*)\[([\w-]+)(?:="([^"]*)")?\]$/u.exec(selector);
+		const pool = scope === undefined ? descendantsOf(root) : scope === ":scope > " ? root.children : root.children.flatMap((child) => child.children);
+		const hit = pool.find((node) => (tag === "" || node.tagName === tag.toUpperCase()) && node.getAttribute(name) !== null && (value === undefined || node.getAttribute(name) === value));
+		if (hit !== undefined) return hit;
+	}
+	return null;
+}
+
+test("a card whose menu sits deep in the file-action slot is decorated once and settles", () => {
+	const { module, document, observers } = loadClient();
+	// DSH 0.2.x renders the chevron inside the open-in-app entry of the
+	// deliverables.file.actions slot: card > body > actions > cell > split > chevron.
+	const card = fakeElement("div");
+	card.setAttribute("data-presented-file", "");
+	const preview = fakeElement("button");
+	preview.setAttribute("title", "/work/out/report.md");
+	card.appendChild(preview);
+	let split = card;
+	for (let depth = 0; depth < 4; depth += 1) split = split.appendChild(fakeElement("div"));
+	const chevron = fakeElement("button");
+	chevron.setAttribute("aria-haspopup", "menu");
+	split.appendChild(chevron);
+	card.querySelector = (selector) => querySelectorIn(card, selector);
+	document.querySelectorAll = (selector) => (selector === "[data-presented-file]" ? [card] : []);
+	module.apply(fakeClientContext().ctx);
+	assert.equal(observers.length, 1);
+	// Each append is itself a mutation; replay a few rounds of them.
+	for (let round = 0; round < 3; round += 1) observers[0]([]);
+	const marks = descendantsOf(card).filter((node) => node.getAttribute("data-dsh-download") !== null);
+	assert.equal(marks.length, 1, "a decorated card must not gain a segment on every mutation");
+	assert.equal(marks[0].parentElement, split, "the segment joins the chevron's split control");
+	assert.equal(marks[0].className, "dsh-dl-seg");
 });
 
 /** Props a session-scoped tab body receives, with the standard hooks stubbed. */
