@@ -2,9 +2,10 @@
  * Contract test against the DSH install this profile actually runs.
  *
  * The plugin works by composing official seams: Connection's exact Fetch route
- * table, the `workspaceFiles` service, the `conversation.chat.turnTail` chain
- * slot, the client-plane `sessions`/`slots`/`locale` services, and three
- * published `data-*` DOM hooks. DSH is a moving target, so every one of those is
+ * table, the `workspaceFiles` service, the `conversation.chat.turnTail` slot
+ * (a chain or a list), the client-plane `sessions`/`slots`/`locale` services,
+ * and three published `data-*` DOM hooks. DSH is a moving target, so every one
+ * of those is
  * re-checked here before an upgrade is trusted.
  *
  * When no DSH install can be found the test skips successfully, so CI does not
@@ -90,9 +91,11 @@ check("the tab body seat is still a keyed slot", /"sidebar\.right\.pane\.tab":\s
 check("the tab title seat still exists", sidebarRight.includes('"sidebar.right.pane.tab.title"'));
 
 const chat = packageFile("@deepseek-ai/dsh-client-ui-chat", "client");
-// dsh 0.2.1 declares the turn-tail seat as a list slot scoped to the session;
-// occupants still register with an id and a select (see tests/client.test.mjs).
-check("conversation.chat.turnTail is still a list slot", /"conversation\.chat\.turnTail":\s*\{\s*kind:\s*"list"/u.test(chat));
+// DSH 0.1.5 declares the turn-tail seat a chain slot, whose renderer injects the
+// selector's result as `matched`; 0.1.7 made it a list slot, which requires an
+// `id` and hands the entry only the owner Turn. The browser half serves both.
+const turnTail = /"conversation\.chat\.turnTail":\s*\{\s*kind:\s*"(chain|list)"/u.exec(chat)?.[1];
+check(`conversation.chat.turnTail is still a chain or list slot (${turnTail ?? "neither"})`, turnTail !== undefined);
 const deliverables = packageFile("@deepseek-ai/dsh-client-ui-deliverables", "client");
 check("deliverables still publishes the turn data key", deliverables.includes('key: "deliverables"'));
 check("delivered-file cards still carry data-presented-file", deliverables.includes('"data-presented-file"'));

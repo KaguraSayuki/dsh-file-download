@@ -119,6 +119,22 @@ function loadClient({ statePlan = [] } = {}) {
 	return { registration, module: module_, document };
 }
 
+/**
+ * Record every URL the bundle hands to the download manager.
+ * @param document - the fake document `loadClient` returned.
+ * @returns The live list of clicked URLs.
+ */
+function captureDownloads(document) {
+	const downloads = [];
+	const create = document.createElement;
+	document.createElement = (tag) => {
+		const element = create(tag);
+		if (tag === "a") element.click = () => downloads.push(new URL(element.href));
+		return element;
+	};
+	return downloads;
+}
+
 /** A turn-tail owner carrying the official deliverables data. */
 function owner({ presented = [], produced = [], seq = 10 } = {}) {
 	const data = { produced, presented };
@@ -179,8 +195,21 @@ test("download URLs are same-origin, absolute, and fully encoded", () => {
 	assert.equal(url.searchParams.get("path"), "out/实验 报告.md");
 });
 
-/** A fake client context that records every registration. */
-function fakeClientContext() {
+/** Slot kinds as DSH 0.1.7+ declares them; 0.1.5 declared the turn tail a chain. */
+const SLOT_KINDS = {
+	"sidebar.right.pane.tab": "keyed",
+	"sidebar.right.pane.tab.title": "keyed",
+	"conversation.chat.turnTail": "list"
+};
+
+/**
+ * A fake client context that records every registration and refuses the ones
+ * the real slot core refuses: a keyed entry without `key`, a list entry without
+ * `id`, a chain entry without `select`.
+ * @param options - slot kinds to enforce.
+ * @returns The recorders and the context.
+ */
+function fakeClientContext({ kinds = SLOT_KINDS } = {}) {
 	const slots = [];
 	const injected = [];
 	const types = [];
@@ -202,8 +231,12 @@ function fakeClientContext() {
 					injected.push(name);
 					return callback();
 				},
-				register: (options) => {
-					slots.push(options);
+				register: (options, component) => {
+					const kind = kinds[options.name];
+					if (kind === "keyed" && options.key === undefined) throw new Error(`keyed slot "${options.name}" requires options.key`);
+					if (kind === "list" && options.id === undefined) throw new Error(`list slot "${options.name}" requires options.id`);
+					if (kind === "chain" && options.select === undefined) throw new Error(`chain slot "${options.name}" requires options.select`);
+					slots.push({ ...options, component });
 					return () => {};
 				}
 			},
@@ -234,7 +267,9 @@ test("apply registers the Sidebar browser type, its body, the turn tail, and one
 	assert.equal(tabs[0].locale, "file-download");
 	assert.equal(titles.length, 1);
 	assert.equal(tails.length, 1);
-	assert.equal(typeof tails[0].select, "function");
+	assert.equal(tails[0].id, "file-download", "a list slot entry needs its own cell id");
+	assert.equal(typeof tails[0].select, "function", "a chain slot entry routes by select");
+	assert.equal(tails[0].component, module.TurnDownload);
 	const styles = document.head.children.filter((node) => node.tagName === "STYLE");
 	assert.equal(styles.length, 1);
 	assert.equal(styles[0].dataset.plugin, "dsh-file-download");
@@ -247,6 +282,53 @@ test("URL builders stay on this origin and name the host routes", () => {
 	assert.equal(new URL(module.archiveUrl("s1", "/etc")).pathname, "/api/workspace.download/archive");
 	assert.equal(new URL(module.browseUrl("s1")).pathname, "/api/workspace.download/browse");
 	assert.equal(new URL(module.downloadUrl("s1", "a.txt")).pathname, "/api/workspace.download");
+});
+
+test("the turn tail registers on both the chain slot of 0.1.5 and the list slot of 0.1.7+", () => {
+	for (const kind of ["chain", "list"]) {
+		const { module } = loadClient();
+		const { ctx, slots } = fakeClientContext({ kinds: { ...SLOT_KINDS, "conversation.chat.turnTail": kind } });
+		module.apply(ctx);
+		assert.equal(slots.filter((entry) => entry.name === "conversation.chat.turnTail").length, 1, kind);
+	}
+	// The stub refuses what the slot core refuses, so the check above is not vacuous.
+	const { ctx } = fakeClientContext();
+	assert.throws(() => ctx.slots.register({ name: "conversation.chat.turnTail", select: () => null }), /requires options\.id/u);
+});
+
+/** Collect every rendered node of a stub JSX tree that satisfies `match`. */
+function findNodes(node, match, found = []) {
+	if (node === null || node === undefined || typeof node !== "object") return found;
+	if (Array.isArray(node)) {
+		for (const child of node) findNodes(child, match, found);
+		return found;
+	}
+	if (match(node)) found.push(node);
+	findNodes(node.props?.children, match, found);
+	return found;
+}
+
+test("the turn tail derives its files when a list slot injects no matched paths", () => {
+	const files = owner({ presented: [{ seq: 3, path: "/out/report.md", index: 0 }], produced: [{ seq: 4, path: "src/app.js" }] });
+	// statePlan [true] renders the menu open.
+	const { module, document } = loadClient({ statePlan: [true] });
+	const downloads = captureDownloads(document);
+	const tree = module.TurnDownload({ turn: files.turn, seq: files.seq, sessionId: "session-7", t: (key) => key });
+	const items = findNodes(tree, (node) => node.props?.role === "menuitem");
+	assert.deepEqual(items.filter((item) => item.props.title !== undefined).map((item) => item.props.title), ["/out/report.md", "src/app.js"]);
+	findNodes(tree, (node) => node.props?.["data-all"] === "true")[0].props.onClick();
+	assert.deepEqual(downloads.map((url) => [url.searchParams.get("sessionId"), url.searchParams.get("path")]), [["session-7", "/out/report.md"], ["session-7", "src/app.js"]]);
+
+	const empty = loadClient({ statePlan: [true] }).module;
+	assert.equal(empty.TurnDownload({ turn: owner().turn, seq: 10, sessionId: "session-7", t: (key) => key }), null, "a turn without files renders nothing");
+	assert.equal(empty.TurnDownload({ turn: { data: { get: () => undefined } }, seq: 1, sessionId: "session-7", t: (key) => key }), null);
+});
+
+test("the turn tail keeps the chain's matched paths when the renderer injects them", () => {
+	const { module } = loadClient({ statePlan: [true] });
+	const tree = module.TurnDownload({ matched: ["a.txt"], turn: owner().turn, seq: 10, sessionId: "session-7", t: (key) => key });
+	const titled = findNodes(tree, (node) => node.props?.role === "menuitem" && node.props.title !== undefined);
+	assert.deepEqual(titled.map((item) => item.props.title), ["a.txt"]);
 });
 
 test("current-session resolution prefers the list snapshot, then the persisted selection", () => {
