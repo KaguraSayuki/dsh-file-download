@@ -77,10 +77,16 @@ export function resolveDsh() {
 
 /**
  * Resolve one specifier from inside the chosen DSH install.
+ *
+ * The anchor sits inside the `@deepseek-ai/dsh` package rather than at the
+ * modules root: installs either hoist the client packages next to
+ * `@deepseek-ai/dsh` (classic npm layout) or bundle them in the package's own
+ * `node_modules` (the global and npx-cache installs), and a require anchored at
+ * the package walks both.
  * @param modules - node_modules root of the install.
  * @param specifier - package or subpath to resolve.
  * @returns The resolved absolute file path.
  */
 export function resolveFrom(modules, specifier) {
-	return createRequire(join(modules, "_.js")).resolve(specifier);
+	return createRequire(join(modules, DSH, "package.json")).resolve(specifier);
 }

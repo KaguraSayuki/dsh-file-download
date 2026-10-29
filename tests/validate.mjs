@@ -56,10 +56,12 @@ check("browser half registers the tab body and its chip title", client.includes(
 check("browser half opens files through the official preview", client.includes("tab.actions.openResource(sessionFileAddress("));
 check("browser half archives a selection through a form", client.includes("submitSelectionArchive("));
 check("browser half offers preview, download, and folder ZIP actions", client.includes('t("open")') && client.includes('t("download")') && client.includes('t("zip")'));
-check("browser half uses the official turn-tail chain", client.includes('ctx.slots.inject("conversation.chat.turnTail"'));
+check("browser half uses the official turn-tail slot", client.includes('ctx.slots.inject("conversation.chat.turnTail"'));
+check("browser half gives its turn-tail entry a list id", client.includes('id: "file-download"'));
 check("browser half decorates delivered-file cards", client.includes('"[data-presented-file]"'));
 check("browser half decorates file-tree rows", client.includes('li[data-files-entry][data-files-path]'));
-check("browser half archives directory rows", client.includes("saveArchive(currentSession(), path)"));
+check("browser half archives directory rows", client.includes("saveArchive(sessionOf(row, ctx), path)"));
+check("browser half names the Session from the decorated subtree", client.includes('"[data-conversation-session], [data-sidebar-right-session]"'));
 check("browser half links the browse page", client.includes("openBrowse(sessionId)"));
 check("host half exposes the browse page", host.includes('export const BROWSE_PATH = "/api/workspace.download/browse"'));
 check("host half exposes the folder archive route", host.includes('export const ARCHIVE_PATH = "/api/workspace.download/archive"'));

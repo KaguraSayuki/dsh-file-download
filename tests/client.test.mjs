@@ -32,6 +32,8 @@ function fakeElement(tag) {
 		children: [],
 		attributes: new Map(),
 		dataset: {},
+		listeners: {},
+		parentElement: null,
 		setAttribute(name, value) {
 			this.attributes.set(name, String(value));
 		},
@@ -44,7 +46,21 @@ function fakeElement(tag) {
 			return child;
 		},
 		remove() {},
-		addEventListener() {},
+		addEventListener(type, listener) {
+			(this.listeners[type] ??= []).push(listener);
+		},
+		/** Dispatch one synthetic event to the recorded listeners. */
+		dispatch(type) {
+			for (const listener of this.listeners[type] ?? []) listener({ preventDefault() {}, stopPropagation() {} });
+		},
+		/** `closest` for a list of bare `[attribute]` selectors, which is all the decorator asks. */
+		closest(selector) {
+			const names = selector.split(",").map((part) => part.trim().replace(/^\[|\]$/gu, ""));
+			for (let node = this; node !== null && node !== undefined; node = node.parentElement) {
+				if (names.some((name) => node.getAttribute(name) !== null)) return node;
+			}
+			return null;
+		},
 		querySelector() {
 			return null;
 		},
@@ -61,10 +77,10 @@ function fakeElement(tag) {
  * rendered with a chosen state (a loaded listing, an editing path box) instead
  * of only its first render. The effects run exactly as React would run them,
  * which is what catches a reference that is read before it is declared.
- * @param options - optional `useState` plan.
+ * @param options - optional `useState` plan and `localStorage` stand-in.
  * @returns The registration, the materialized module, and the fake document.
  */
-function loadClient({ statePlan = [] } = {}) {
+function loadClient({ statePlan = [], localStorage } = {}) {
 	let registration;
 	const window = { __ModuleLoader__: { load: (definition) => (registration = definition) } };
 	const document = {
@@ -90,6 +106,7 @@ function loadClient({ statePlan = [] } = {}) {
 		},
 		console
 	};
+	if (localStorage !== undefined) sandbox.localStorage = localStorage;
 	sandbox.globalThis = sandbox;
 	vm.createContext(sandbox);
 	vm.runInContext(SOURCE, sandbox);
@@ -117,6 +134,22 @@ function loadClient({ statePlan = [] } = {}) {
 		throw new Error(`browser half required an unexpected module: ${specifier}`);
 	});
 	return { registration, module: module_, document };
+}
+
+/**
+ * Record every URL the bundle hands to the download manager.
+ * @param document - the fake document `loadClient` returned.
+ * @returns The live list of clicked URLs.
+ */
+function captureDownloads(document) {
+	const downloads = [];
+	const create = document.createElement;
+	document.createElement = (tag) => {
+		const element = create(tag);
+		if (tag === "a") element.click = () => downloads.push(new URL(element.href));
+		return element;
+	};
+	return downloads;
 }
 
 /** A turn-tail owner carrying the official deliverables data. */
@@ -179,8 +212,21 @@ test("download URLs are same-origin, absolute, and fully encoded", () => {
 	assert.equal(url.searchParams.get("path"), "out/实验 报告.md");
 });
 
-/** A fake client context that records every registration. */
-function fakeClientContext() {
+/** Slot kinds as DSH 0.1.7+ declares them; 0.1.5 declared the turn tail a chain. */
+const SLOT_KINDS = {
+	"sidebar.right.pane.tab": "keyed",
+	"sidebar.right.pane.tab.title": "keyed",
+	"conversation.chat.turnTail": "list"
+};
+
+/**
+ * A fake client context that records every registration and refuses the ones
+ * the real slot core refuses: a keyed entry without `key`, a list entry without
+ * `id`, a chain entry without `select`.
+ * @param options - slot kinds to enforce and the list snapshot to expose.
+ * @returns The recorders and the context.
+ */
+function fakeClientContext({ kinds = SLOT_KINDS, snapshot = { current: "session-1" } } = {}) {
 	const slots = [];
 	const injected = [];
 	const types = [];
@@ -202,14 +248,18 @@ function fakeClientContext() {
 					injected.push(name);
 					return callback();
 				},
-				register: (options) => {
-					slots.push(options);
+				register: (options, component) => {
+					const kind = kinds[options.name];
+					if (kind === "keyed" && options.key === undefined) throw new Error(`keyed slot "${options.name}" requires options.key`);
+					if (kind === "list" && options.id === undefined) throw new Error(`list slot "${options.name}" requires options.id`);
+					if (kind === "chain" && options.select === undefined) throw new Error(`chain slot "${options.name}" requires options.select`);
+					slots.push({ ...options, component });
 					return () => {};
 				}
 			},
 			sessions: {
 				list: {
-					getSnapshot: () => ({ current: "session-1" }),
+					getSnapshot: () => snapshot,
 					subscribe: () => () => {}
 				}
 			}
@@ -234,7 +284,9 @@ test("apply registers the Sidebar browser type, its body, the turn tail, and one
 	assert.equal(tabs[0].locale, "file-download");
 	assert.equal(titles.length, 1);
 	assert.equal(tails.length, 1);
-	assert.equal(typeof tails[0].select, "function");
+	assert.equal(tails[0].id, "file-download", "a list slot entry needs its own cell id");
+	assert.equal(typeof tails[0].select, "function", "a chain slot entry routes by select");
+	assert.equal(tails[0].component, module.TurnDownload);
 	const styles = document.head.children.filter((node) => node.tagName === "STYLE");
 	assert.equal(styles.length, 1);
 	assert.equal(styles[0].dataset.plugin, "dsh-file-download");
@@ -247,6 +299,78 @@ test("URL builders stay on this origin and name the host routes", () => {
 	assert.equal(new URL(module.archiveUrl("s1", "/etc")).pathname, "/api/workspace.download/archive");
 	assert.equal(new URL(module.browseUrl("s1")).pathname, "/api/workspace.download/browse");
 	assert.equal(new URL(module.downloadUrl("s1", "a.txt")).pathname, "/api/workspace.download");
+});
+
+test("the turn tail registers on both the chain slot of 0.1.5 and the list slot of 0.1.7+", () => {
+	for (const kind of ["chain", "list"]) {
+		const { module } = loadClient();
+		const { ctx, slots } = fakeClientContext({ kinds: { ...SLOT_KINDS, "conversation.chat.turnTail": kind } });
+		module.apply(ctx);
+		assert.equal(slots.filter((entry) => entry.name === "conversation.chat.turnTail").length, 1, kind);
+	}
+	// The stub refuses what the slot core refuses, so the check above is not vacuous.
+	const { ctx } = fakeClientContext();
+	assert.throws(() => ctx.slots.register({ name: "conversation.chat.turnTail", select: () => null }), /requires options\.id/u);
+});
+
+/** Collect every rendered node of a stub JSX tree that satisfies `match`. */
+function findNodes(node, match, found = []) {
+	if (node === null || node === undefined || typeof node !== "object") return found;
+	if (Array.isArray(node)) {
+		for (const child of node) findNodes(child, match, found);
+		return found;
+	}
+	if (match(node)) found.push(node);
+	findNodes(node.props?.children, match, found);
+	return found;
+}
+
+test("the turn tail derives its files when a list slot injects no matched paths", () => {
+	const files = owner({ presented: [{ seq: 3, path: "/out/report.md", index: 0 }], produced: [{ seq: 4, path: "src/app.js" }] });
+	// statePlan [true] renders the menu open.
+	const { module, document } = loadClient({ statePlan: [true] });
+	const downloads = captureDownloads(document);
+	const tree = module.TurnDownload({ turn: files.turn, seq: files.seq, sessionId: "session-7", t: (key) => key });
+	const items = findNodes(tree, (node) => node.props?.role === "menuitem");
+	assert.deepEqual(items.filter((item) => item.props.title !== undefined).map((item) => item.props.title), ["/out/report.md", "src/app.js"]);
+	findNodes(tree, (node) => node.props?.["data-all"] === "true")[0].props.onClick();
+	assert.deepEqual(downloads.map((url) => [url.searchParams.get("sessionId"), url.searchParams.get("path")]), [["session-7", "/out/report.md"], ["session-7", "src/app.js"]]);
+
+	const empty = loadClient({ statePlan: [true] }).module;
+	assert.equal(empty.TurnDownload({ turn: owner().turn, seq: 10, sessionId: "session-7", t: (key) => key }), null, "a turn without files renders nothing");
+	assert.equal(empty.TurnDownload({ turn: { data: { get: () => undefined } }, seq: 1, sessionId: "session-7", t: (key) => key }), null);
+});
+
+test("the turn tail keeps the chain's matched paths when the renderer injects them", () => {
+	const { module } = loadClient({ statePlan: [true] });
+	const tree = module.TurnDownload({ matched: ["a.txt"], turn: owner().turn, seq: 10, sessionId: "session-7", t: (key) => key });
+	const titled = findNodes(tree, (node) => node.props?.role === "menuitem" && node.props.title !== undefined);
+	assert.deepEqual(titled.map((item) => item.props.title), ["a.txt"]);
+});
+
+test("a decorated node resolves the Session of its own official subtree", () => {
+	const { module } = loadClient();
+	const scoped = (attribute, id) => {
+		const root = fakeElement("div");
+		root.setAttribute(attribute, id);
+		const node = fakeElement("div");
+		root.appendChild(node);
+		return { root, node };
+	};
+	const moved = { sessions: { list: { getSnapshot: () => ({ ids: [], byId: {}, phase: "ready" }) } } };
+	const legacy = { sessions: { list: { getSnapshot: () => ({ current: "session-1" }) } } };
+	assert.equal(module.sessionOf(scoped("data-conversation-session", "session-a").node, moved), "session-a");
+	assert.equal(module.sessionOf(scoped("data-sidebar-right-session", "session-b").node, moved), "session-b");
+	assert.equal(module.sessionOf(scoped("data-conversation-session", "session-a").node, legacy), "session-a", "the owning subtree outranks a page-wide current");
+	// An embedded conversation inside another Session's Sidebar belongs to the nearer owner.
+	const outer = scoped("data-sidebar-right-session", "session-b");
+	const inner = scoped("data-conversation-session", "session-c");
+	outer.node.appendChild(inner.root);
+	assert.equal(module.sessionOf(inner.node, moved), "session-c");
+	assert.equal(module.sessionOf(scoped("data-conversation-session", "").node, legacy), undefined, "an empty owner names nothing and never falls through");
+	assert.equal(module.sessionOf(fakeElement("div"), legacy), "session-1", "DSH 0.1.5 has no owner hook and one Session per page");
+	assert.equal(module.sessionOf(fakeElement("div"), moved), undefined, "no owner and no current means no download");
+	assert.equal(module.sessionOf(undefined, undefined), undefined);
 });
 
 test("the upload URL carries the directory, name, mode, and overwrite flag", () => {
@@ -356,6 +480,61 @@ test("the decoration pass appends to published hooks and re-applies after remova
 	const cardButton = cards[0].children[1].children.find((child) => child.getAttribute("data-dsh-download") !== null);
 	assert.ok(cardButton !== undefined, "delivered-file card must gain a download segment");
 	assert.equal(cardButton.className, "dsh-dl-seg");
+});
+
+test("a decoration click downloads from the Session that renders it, never a shared selection", () => {
+	// Another tab of the same origin selected session-z last; a blocked store
+	// throws on read. Neither may decide, or even break, a click here.
+	let reads = 0;
+	const localStorage = {
+		getItem() {
+			reads += 1;
+			throw new Error("SecurityError");
+		}
+	};
+	const { module, document } = loadClient({ localStorage });
+	const downloads = captureDownloads(document);
+	const conversation = fakeElement("div");
+	conversation.setAttribute("data-conversation-session", "session-a");
+	const sidebar = fakeElement("div");
+	sidebar.setAttribute("data-sidebar-right-session", "session-b");
+	const card = fakeElement("div");
+	const preview = fakeElement("button");
+	preview.setAttribute("title", "out/report.md");
+	card.appendChild(preview);
+	card.querySelector = (selector) => (selector === "button[title]" ? preview : null);
+	conversation.appendChild(card);
+	const rows = [["file", "notes.md"], ["directory", "src"]].map(([kind, path]) => {
+		const row = fakeElement("li");
+		row.setAttribute("data-files-entry", kind);
+		row.setAttribute("data-files-path", path);
+		sidebar.appendChild(row);
+		return row;
+	});
+	document.querySelectorAll = (selector) => {
+		if (selector === "[data-presented-file]") return [card];
+		if (selector.startsWith("li[data-files-entry")) return rows;
+		return [];
+	};
+	const { ctx } = fakeClientContext({ snapshot: { ids: [], byId: {}, phase: "ready" } });
+	module.apply(ctx);
+	const injected = (node) => node.children.find((child) => child.getAttribute("data-dsh-download") !== null);
+	injected(card).dispatch("click");
+	for (const row of rows) injected(row).dispatch("click");
+	assert.deepEqual(downloads.map((url) => [url.pathname, url.searchParams.get("sessionId"), url.searchParams.get("path")]), [
+		["/api/workspace.download", "session-a", "out/report.md"],
+		["/api/workspace.download", "session-b", "notes.md"],
+		["/api/workspace.download/archive", "session-b", "src"]
+	]);
+	// The owner is read at click time, so a re-targeted view never reuses a stale id.
+	conversation.setAttribute("data-conversation-session", "session-c");
+	injected(card).dispatch("click");
+	assert.equal(downloads.at(-1).searchParams.get("sessionId"), "session-c");
+	// Outside any owner on a build without `current`, a click does nothing.
+	conversation.attributes.delete("data-conversation-session");
+	injected(card).dispatch("click");
+	assert.equal(downloads.length, 4);
+	assert.equal(reads, 0, "the persisted selection is never consulted");
 });
 
 /** Props a session-scoped tab body receives, with the standard hooks stubbed. */

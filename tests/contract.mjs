@@ -2,9 +2,10 @@
  * Contract test against the DSH install this profile actually runs.
  *
  * The plugin works by composing official seams: Connection's exact Fetch route
- * table, the `workspaceFiles` service, the `conversation.chat.turnTail` chain
- * slot, the client-plane `sessions`/`slots`/`locale` services, and three
- * published `data-*` DOM hooks. DSH is a moving target, so every one of those is
+ * table, the `workspaceFiles` service, the `conversation.chat.turnTail` slot
+ * (a chain or a list), the client-plane `sessions`/`slots`/`locale` services,
+ * the published `data-*` DOM hooks it decorates, and the hooks that name the
+ * Session owning them. DSH is a moving target, so every one of those is
  * re-checked here before an upgrade is trusted.
  *
  * When no DSH install can be found the test skips successfully, so CI does not
@@ -90,12 +91,15 @@ check("the tab body seat is still a keyed slot", /"sidebar\.right\.pane\.tab":\s
 check("the tab title seat still exists", sidebarRight.includes('"sidebar.right.pane.tab.title"'));
 
 const chat = packageFile("@deepseek-ai/dsh-client-ui-chat", "client");
-check("conversation.chat.turnTail is still a chain slot", /"conversation\.chat\.turnTail":\s*\{\s*kind:\s*"chain"/u.test(chat));
+// DSH 0.1.5 declares the turn-tail seat a chain slot, whose renderer injects the
+// selector's result as `matched`; 0.1.7 made it a list slot, which requires an
+// `id` and hands the entry only the owner Turn. The browser half serves both.
+const turnTail = /"conversation\.chat\.turnTail":\s*\{\s*kind:\s*"(chain|list)"/u.exec(chat)?.[1];
+check(`conversation.chat.turnTail is still a chain or list slot (${turnTail ?? "neither"})`, turnTail !== undefined);
 const deliverables = packageFile("@deepseek-ai/dsh-client-ui-deliverables", "client");
 check("deliverables still publishes the turn data key", deliverables.includes('key: "deliverables"'));
 check("delivered-file cards still carry data-presented-file", deliverables.includes('"data-presented-file"'));
 check("delivered-file cards still carry the menu anchor", deliverables.includes('"aria-haspopup"'));
-check("produced files still carry the row hook", deliverables.includes('"data-produced-files-row"'));
 const sidebarFiles = packageFile("@deepseek-ai/dsh-client-ui-sidebar-files", "client");
 check("file-tree rows still carry data-files-entry", sidebarFiles.includes('"data-files-entry"'));
 check("file-tree rows still carry data-files-path", sidebarFiles.includes('"data-files-path"'));
@@ -104,13 +108,19 @@ const renderer = packageFile("@deepseek-ai/dsh-client-ui-renderer", "client");
 check("the slots service is still provided", renderer.includes('super(ctx, "slots")'));
 const sessionController = packageFile("@deepseek-ai/dsh-api-session-controller", "client");
 check("the client sessions service is still provided", sessionController.includes('provide("sessions"'));
-check("the session list still exposes a current id", sessionController.includes("current: void 0"));
+// A decoration downloads from the Session of the subtree it sits in. DSH 0.1.7+
+// names that owner on the conversation body and on every right-Sidebar Session
+// view; 0.1.5 names neither and renders one Session, the list snapshot's current.
+const conversation = packageFile("@deepseek-ai/dsh-client-ui-conversation", "client");
+const owners = conversation.includes('"data-conversation-session"') && sidebarRight.includes('"data-sidebar-right-session"');
+const listCurrent = sessionController.includes("current: void 0");
+check(`decorated nodes can still name their Session (${owners ? "owner hooks" : listCurrent ? "list current" : "neither"})`, owners || listCurrent);
 const locale = packageFile("@deepseek-ai/dsh-client-locale", "client");
 check("the locale service still registers namespaces", locale.includes("register(") && locale.includes("bind("));
 
 const frontend = frontendBundle();
 check("the module table still seeds react/jsx-runtime", frontend.includes('"react/jsx-runtime"'));
-check("the module table still seeds react", frontend.includes('"react":'));
+check("the module table still seeds react", /[{,]\s*(?:"react"|react):/u.test(frontend));
 check("the module table still seeds the slots module", frontend.includes('"@deepseek-ai/dsh-client-ui-slots"'));
 
 console.log("");
