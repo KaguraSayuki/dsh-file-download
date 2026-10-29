@@ -29,7 +29,7 @@ Bytes never enter JavaScript for a single download: each of those hands a same-o
 
 ## Install
 
-Requirements: DSH `0.1.5-rc.1` or newer in the `0.1.5` line, Node 20+, and a `web` profile.
+Requirements: DSH `0.1.5-rc.1` or newer, Node 20+, and a `web` profile. The DSH releases the contract test has been run against are listed under [Compatibility](#compatibility).
 
 ```sh
 # from a local checkout
@@ -94,9 +94,11 @@ Upload bodies are capped at 64 MiB. A text body is written through the composed 
 
 The Files tab is a real tab type registered through `ctx.sidebarRightTabs` and its body through the keyed `sidebar.right.pane.tab` slot — the same extension points the official Files tab uses, so nothing official is patched. It is a page type, so it never competes with the preview for a file address.
 
-The turn dropdown is an occupant of the official `conversation.chat.turnTail` chain slot and reads the same Turn data the official deliverables row reads, so the two lists cannot disagree.
+The turn dropdown is an occupant of the official `conversation.chat.turnTail` slot (a chain on DSH 0.1.5, a list from 0.1.7) and reads the same Turn data the official deliverables row reads, so the two lists cannot disagree.
 
 The delivered-file card and file-tree buttons are DOM decorations over hooks those packages already publish (`data-presented-file`, `data-files-entry`, `data-files-path`). Each injected node is appended at the end of its container rather than interleaved between React-managed siblings, and a `MutationObserver` re-applies decorations after a re-render. Removing the plugin removes every injected node.
+
+A decorated button downloads from the Session whose official subtree contains it — `data-conversation-session` or `data-sidebar-right-session`, published since DSH 0.1.7 — read at click time, never from a page-wide or persisted selection that another tab may have changed last. DSH 0.1.5 publishes neither and renders one Session per page; there the session list's current Session is used.
 
 ### Serving, resuming, and compression
 
@@ -125,7 +127,7 @@ DSH is a moving target, so every hook this plugin composes is re-checked by a co
 DSH_MODULES=/path/to/node_modules npm run contract
 ```
 
-The contract test currently passes against DSH `0.1.5-rc.1`. After a DSH upgrade, run `npm test`; a red contract check names the exact upstream hook that moved.
+The contract test currently passes against DSH `0.1.5-rc.1`, `0.2.0-rc.2`, `0.2.1-rc.2`, and `0.2.1-rc.5`; the browser surfaces were last checked end to end on `0.2.1-rc.2`. After a DSH upgrade, run `npm test`; a red contract check names the exact upstream hook that moved.
 
 ## Development
 

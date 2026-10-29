@@ -29,7 +29,7 @@ DSH 的原生文件动作是宿主侧的：「用默认程序打开」「在文�
 
 ## 安装
 
-要求：DSH `0.1.5` 线的 `0.1.5-rc.1` 或更高、Node 20+、`web` profile。
+要求：DSH `0.1.5-rc.1` 或更高、Node 20+、`web` profile。contract 测试实际跑过的 DSH 版本列在[兼容性](#兼容性)一节。
 
 ```sh
 # 本地检出
@@ -94,9 +94,11 @@ dsh plugin --profile web remove dsh-file-download
 
 文件页签是通过 `ctx.sidebarRightTabs` 注册的真实页签类型，页签体注册在 keyed 的 `sidebar.right.pane.tab` slot 上——和官方「文件」页签用的是同一套扩展点，因此没有改动任何官方代码。它是页面类型，所以不会与预览争抢文件地址。
 
-回合下拉是官方 `conversation.chat.turnTail` 链式 slot 的占用者，读取的是官方交付行读取的同一份 Turn 数据，因此两份列表不可能不一致。
+回合下拉是官方 `conversation.chat.turnTail` slot（DSH 0.1.5 为链式，0.1.7 起为 list）的占用者，读取的是官方交付行读取的同一份 Turn 数据，因此两份列表不可能不一致。
 
 交付卡片与文件树按钮是对官方已发布钩子（`data-presented-file`、`data-files-entry`、`data-files-path`）的 DOM 装饰。每个注入节点都追加在容器末尾，而不是插进 React 管理的兄弟节点之间；`MutationObserver` 会在重渲染后重新施加装饰。卸载插件会移除全部注入节点。
+
+装饰按钮下载的是包含它的官方子树所属的 Session——即 DSH 0.1.7 起发布的 `data-conversation-session` 或 `data-sidebar-right-session`——并在点击时读取，从不使用可能已被其他标签页改掉的页面级或持久化选择。DSH 0.1.5 两者都没有发布，且每页只渲染一个 Session，此时使用 Session 列表的当前 Session。
 
 ### 传输、续传与压缩
 
@@ -125,7 +127,7 @@ DSH 是移动靶，所以本插件组合的每个钩子都由 contract 测试针
 DSH_MODULES=/path/to/node_modules npm run contract
 ```
 
-当前对 DSH `0.1.5-rc.1` 全部通过。升级 DSH 后跑一次 `npm test`；变红的那一项会直接点出移动了的上游钩子。
+当前对 DSH `0.1.5-rc.1`、`0.2.0-rc.2`、`0.2.1-rc.2`、`0.2.1-rc.5` 全部通过；浏览器界面最近一次端到端验证在 `0.2.1-rc.2` 上进行。升级 DSH 后跑一次 `npm test`；变红的那一项会直接点出移动了的上游钩子。
 
 ## 开发
 
